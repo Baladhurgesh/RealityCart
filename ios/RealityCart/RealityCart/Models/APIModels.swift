@@ -145,7 +145,7 @@ struct CheckoutLinkDTO: Codable, Identifiable {
     let url: String
 }
 
-struct CartLine: Identifiable, Equatable {
+struct CartLine: Codable, Identifiable, Equatable {
     var id: String { variantID }
     let variantID: String
     let shop: String

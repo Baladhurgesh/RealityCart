@@ -7,6 +7,7 @@ final class RedesignSession: ObservableObject {
     private enum Keys {
         static let apiBaseURL = "realitycart.apiBaseURL"
         static let budget = "realitycart.budgetUSD"
+        static let cart = "realitycart.cart"
     }
 
     @Published var capturedImage: UIImage?
@@ -27,7 +28,9 @@ final class RedesignSession: ObservableObject {
     @Published var errorMessage: String?
     @Published var health: HealthResponse?
     /// Product id → local-server USDZ URL, filled when Meshy finishes.
-    @Published var cart: [CartLine] = []
+    @Published var cart: [CartLine] {
+        didSet { persistCart() }
+    }
     @Published var designHistory: [DesignRecord] = []
     @Published var generatedModels: [String: String] = [:]
     /// Product id → "generating" | "ready" | "failed"
@@ -43,7 +46,21 @@ final class RedesignSession: ObservableObject {
         #endif
         self.apiBaseURL = defaults.string(forKey: Keys.apiBaseURL) ?? fallbackURL
         self.budgetUSD = defaults.object(forKey: Keys.budget) as? Double ?? 600
+        self.cart = Self.loadCart()
         self.designHistory = DesignHistory.loadIndex()
+    }
+
+    private static func loadCart() -> [CartLine] {
+        guard let data = UserDefaults.standard.data(forKey: Keys.cart),
+              let lines = try? JSONDecoder().decode([CartLine].self, from: data) else {
+            return []
+        }
+        return lines
+    }
+
+    private func persistCart() {
+        guard let data = try? JSONEncoder().encode(cart) else { return }
+        UserDefaults.standard.set(data, forKey: Keys.cart)
     }
 
     private var client: APIClient { APIClient(baseURL: URL(string: apiBaseURL)) }
@@ -70,7 +87,7 @@ final class RedesignSession: ObservableObject {
         }
 
         isLoading = true
-        statusMessage = "Hydrogen scene → Carbon plan → Shopify → Decisions…"
+        statusMessage = "Hydrogen scene → Neon plan → Shopify → Decisions…"
         generatedModels = [:]
         modelStatus = [:]
         cart = []
@@ -91,9 +108,13 @@ final class RedesignSession: ObservableObject {
                 image: image,
                 intent: intentText,
                 budgetUSD: budgetUSD,
-                result: response
+                result: response,
+                roomPlanJSON: roomPlanJSON,
+                roomUSDZ: roomPlanUSDZURL
             ) {
                 designHistory.insert(saved, at: 0)
+            } else {
+                statusMessage = "Plan ready, but this run could not be saved to history."
             }
             generateMissingModels()
         } catch {
@@ -102,12 +123,21 @@ final class RedesignSession: ObservableObject {
         }
     }
 
+    func reloadHistory() {
+        designHistory = DesignHistory.loadIndex()
+    }
+
     func showSavedDesign(_ record: DesignRecord) {
         guard let saved = DesignHistory.loadResult(id: record.id) else { return }
         generationTask?.cancel()
         result = saved
         capturedImage = DesignHistory.loadImage(id: record.id)
-        cart = []
+        if let json = DesignHistory.loadRoomPlan(id: record.id) {
+            roomPlanJSON = json
+        }
+        if let usdz = DesignHistory.loadRoomUSDZ(id: record.id) {
+            roomPlanUSDZURL = usdz
+        }
         generatedModels = [:]
         modelStatus = [:]
         statusMessage = record.summary
@@ -183,27 +213,40 @@ final class RedesignSession: ObservableObject {
 
     private func generateOne(productID: String, imageURLs: [String]) async {
         let key = ModelKey.make(productID)
-        modelStatus[productID] = "generating"
+        setModelStatus(productID, "generating")
         do {
             _ = try await client.startGeneratedModel(productID: productID, imageURLs: imageURLs)
             while !Task.isCancelled {
                 let job = try await client.generatedModelStatus(key: key)
                 if job.status == "ready" {
-                    generatedModels[productID] = client.generatedModelFileURL(key: key).absoluteString
-                    modelStatus[productID] = "ready"
+                    setGeneratedModel(productID, client.generatedModelFileURL(key: key).absoluteString)
+                    setModelStatus(productID, "ready")
                     return
                 }
                 if job.status == "failed" {
-                    modelStatus[productID] = "failed"
+                    setModelStatus(productID, "failed")
                     return
                 }
                 try await Task.sleep(nanoseconds: 4_000_000_000)
             }
         } catch {
             if !Task.isCancelled {
-                modelStatus[productID] = "failed"
+                setModelStatus(productID, "failed")
             }
         }
+    }
+
+    /// Dictionary subscript writes do not always publish. Replace the value.
+    private func setModelStatus(_ productID: String, _ status: String) {
+        var next = modelStatus
+        next[productID] = status
+        modelStatus = next
+    }
+
+    private func setGeneratedModel(_ productID: String, _ url: String) {
+        var next = generatedModels
+        next[productID] = url
+        generatedModels = next
     }
 }
 
@@ -226,19 +269,54 @@ enum DesignHistory {
 
     private static var indexURL: URL { root.appendingPathComponent("index.json") }
 
-    static func loadIndex() -> [DesignRecord] {
-        guard let data = try? Data(contentsOf: indexURL),
-              let records = try? JSONDecoder().decode([DesignRecord].self, from: data) else {
-            return []
+    static func loadIndex(recover: Bool = true) -> [DesignRecord] {
+        if let data = try? Data(contentsOf: indexURL),
+           let records = try? JSONDecoder().decode([DesignRecord].self, from: data),
+           !records.isEmpty {
+            return records.sorted { $0.createdAt > $1.createdAt }
         }
-        return records.sorted { $0.createdAt > $1.createdAt }
+        guard recover else { return [] }
+        return recoverFromFolders()
+    }
+
+    /// Rebuild the list from saved folders when index.json is missing or empty.
+    private static func recoverFromFolders() -> [DesignRecord] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.creationDateKey, .isDirectoryKey]
+        ) else { return [] }
+        var records: [DesignRecord] = []
+        for folder in entries {
+            let isDirectory = (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            guard isDirectory, let result = loadResult(id: folder.lastPathComponent) else { continue }
+            let created = (try? folder.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
+            records.append(
+                DesignRecord(
+                    id: folder.lastPathComponent,
+                    createdAt: created,
+                    intent: "",
+                    budgetUSD: result.plan.budget_usd,
+                    summary: result.plan.summary,
+                    sceneType: result.scene.scene_type,
+                    productTitles: result.placements.map(\.product.title),
+                    totalUSD: result.total_usd
+                )
+            )
+        }
+        records.sort { $0.createdAt > $1.createdAt }
+        if !records.isEmpty {
+            try? JSONEncoder().encode(records).write(to: indexURL, options: .atomic)
+        }
+        return records
     }
 
     static func save(
         image: UIImage,
         intent: String,
         budgetUSD: Double,
-        result: RedesignResponseDTO
+        result: RedesignResponseDTO,
+        roomPlanJSON: Data? = nil,
+        roomUSDZ: URL? = nil
     ) -> DesignRecord? {
         let id = UUID().uuidString
         let folder = root.appendingPathComponent(id, isDirectory: true)
@@ -247,8 +325,18 @@ enum DesignHistory {
             if let jpeg = image.jpegData(compressionQuality: 0.7) {
                 try jpeg.write(to: folder.appendingPathComponent("capture.jpg"))
             }
+            if let roomPlanJSON {
+                try roomPlanJSON.write(to: folder.appendingPathComponent("roomplan.json"), options: .atomic)
+            }
+            if let roomUSDZ, FileManager.default.fileExists(atPath: roomUSDZ.path) {
+                let dest = folder.appendingPathComponent("room.usdz")
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.copyItem(at: roomUSDZ, to: dest)
+            }
             let encoded = try JSONEncoder().encode(result)
-            try encoded.write(to: folder.appendingPathComponent("result.json"))
+            try encoded.write(to: folder.appendingPathComponent("result.json"), options: .atomic)
             let record = DesignRecord(
                 id: id,
                 createdAt: Date(),
@@ -259,13 +347,13 @@ enum DesignHistory {
                 productTitles: result.placements.map(\.product.title),
                 totalUSD: result.total_usd
             )
-            var records = loadIndex()
+            var records = loadIndex(recover: false)
             records.insert(record, at: 0)
             if records.count > 40 {
                 records.suffix(from: 40).forEach { delete(id: $0.id) }
                 records = Array(records.prefix(40))
             }
-            try JSONEncoder().encode(records).write(to: indexURL)
+            try JSONEncoder().encode(records).write(to: indexURL, options: .atomic)
             return record
         } catch {
             return nil
@@ -276,6 +364,16 @@ enum DesignHistory {
         let url = root.appendingPathComponent(id).appendingPathComponent("result.json")
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(RedesignResponseDTO.self, from: data)
+    }
+
+    static func loadRoomPlan(id: String) -> Data? {
+        let url = root.appendingPathComponent(id).appendingPathComponent("roomplan.json")
+        return try? Data(contentsOf: url)
+    }
+
+    static func loadRoomUSDZ(id: String) -> URL? {
+        let url = root.appendingPathComponent(id).appendingPathComponent("room.usdz")
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     static func loadImage(id: String) -> UIImage? {

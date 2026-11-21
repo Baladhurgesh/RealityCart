@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     # Model IDs
     scene_model: str = "gemini-4-hydrogen"
-    plan_model: str = "gemini-4-carbon"
+    plan_model: str = "gemini-4-neon"
     decision_model: str = "gemini-decision-1"
     meshy_api_key: str = ""
     # meshy-6-lite is the fast textured preview used for the phone overlay.

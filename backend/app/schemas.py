@@ -137,7 +137,7 @@ class DesignPlan(BaseModel):
     keep_object_ids: list[str] = Field(default_factory=list)
     remove_object_ids: list[str] = Field(default_factory=list)
     slots: list[PlacementSlot] = Field(default_factory=list)
-    model: str = "gemini-4-carbon"
+    model: str = "gemini-4-neon"
     color_direction: list[str] = Field(default_factory=list)
     allocated_usd: float = 0.0  # sum of slot price caps
     warnings: list[str] = Field(default_factory=list)

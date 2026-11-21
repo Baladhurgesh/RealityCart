@@ -1,4 +1,4 @@
-"""gemini-4-carbon: design planner (scene + intent + budget → shoppable slots).
+"""gemini-4-neon: design planner (scene + intent + budget → shoppable slots).
 
 Carbon owns taste: style direction, what to keep/remove/replace, which items to
 buy and how to search for them. ``plan_rules`` then makes the plan executable
@@ -67,7 +67,7 @@ class CarbonOutput(BaseModel):
     slots: list[CSlot]
 
 
-PROMPT = """You are Carbon, RealityCart's interior design planner.
+PROMPT = """You are Neon, RealityCart's interior design planner.
 Turn the user's request into a short shopping plan for THIS room, using only
 real open positions from the scene analysis.
 

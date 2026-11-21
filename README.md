@@ -11,7 +11,7 @@
 | iOS client | SwiftUI + RoomPlan LiDAR (Pro) + RealityKit proxies + Speech |
 | Backend | FastAPI |
 | Scene parse | `gemini-4-hydrogen` |
-| Design plan | `gemini-4-carbon` |
+| Design plan | `gemini-4-neon` |
 | Gates | `gemini-decision-1` (Decisions API) |
 | Commerce | Shop MCP (`mcp.shop.com`) with Shopify Catalog MCP fallback (`search_catalog`, `get_product`) |
 
@@ -22,7 +22,7 @@ iOS capture (photo / RoomPlan)
 FastAPI  POST /v1/redesign
         │
         ├─ Hydrogen → SceneAnalysis
-        ├─ Carbon   → DesignPlan (slots + queries)
+        ├─ Neon     → DesignPlan (slots + queries)
         ├─ Shopify  → real products
         └─ Decisions→ fit / style / budget
         │
@@ -35,7 +35,7 @@ iOS Plan + 3D preview
 | Model | Job |
 | --- | --- |
 | `gemini-4-hydrogen` | Multimodal scene parse from photo + optional RoomPlan JSON |
-| `gemini-4-carbon` | Shopping plan, placement slots, re-plan after Decision failures |
+| `gemini-4-neon` | Shopping plan, placement slots, re-plan after Decision failures |
 | `gemini-decision-1` | Binary gates: fits surface? style match? within budget? |
 | Shopify Catalog MCP | Cross-merchant product discovery with live prices/links |
 

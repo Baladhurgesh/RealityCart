@@ -9,6 +9,8 @@ struct ContentView: View {
             CaptureView(onContinue: {
                 Keyboard.dismiss()
                 tab = 1
+            }, onOpenSaved: {
+                tab = 2
             })
             .tabItem { Label("Capture", systemImage: "camera.viewfinder") }
             .tag(0)
@@ -22,12 +24,18 @@ struct ContentView: View {
             .tag(1)
 
             ResultsView()
-                .tabItem { Label("Plan", systemImage: "cart") }
+                .tabItem { Label("Plan", systemImage: "list.bullet.rectangle") }
                 .tag(2)
 
-            Preview3DView()
-                .tabItem { Label("3D", systemImage: "cube.transparent") }
-                .tag(3)
+            Group {
+                if tab == 3 {
+                    Preview3DView()
+                } else {
+                    Color.clear
+                }
+            }
+            .tabItem { Label("3D", systemImage: "cube.transparent") }
+            .tag(3)
 
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gear") }

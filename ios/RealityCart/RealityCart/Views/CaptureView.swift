@@ -4,9 +4,11 @@ import UIKit
 struct CaptureView: View {
     @EnvironmentObject private var session: RedesignSession
     var onContinue: () -> Void
+    var onOpenSaved: () -> Void = {}
 
     @State private var showRoomPlan = false
     @State private var showScanViewer = false
+    @State private var showHistory = false
 
     private var canContinue: Bool {
         session.capturedImage != nil && session.roomPlanJSON != nil
@@ -16,74 +18,105 @@ struct CaptureView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    HStack(spacing: 12) {
-                        Image("Logo")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 56, height: 56)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                        Text("RealityCart")
-                            .font(.largeTitle.bold())
-                    }
-                    Text("Scan any room or indoor space with RoomPlan LiDAR. Review the 3D scan, then continue.")
+                    Text("Scan your room with LiDAR, then set how you want it to feel.")
                         .foregroundStyle(.secondary)
 
-                    if let image = session.capturedImage {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 240)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                    } else {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color(.secondarySystemBackground))
-                            .frame(height: 180)
-                            .overlay {
-                                Label("No RoomPlan scan yet", systemImage: "camera.metering.matrix")
+                    ZStack(alignment: .bottomLeading) {
+                        if let image = session.capturedImage {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 260)
+                                .clipped()
+                        } else {
+                            Color(.secondarySystemBackground)
+                                .frame(height: 260)
+                                .overlay {
+                                    VStack(spacing: 8) {
+                                        Image(systemName: "camera.metering.matrix")
+                                            .font(.largeTitle)
+                                        Text("No scan yet")
+                                            .font(.subheadline)
+                                    }
                                     .foregroundStyle(.secondary)
-                            }
+                                }
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+
+                    if canContinue {
+                        Label("Scan ready", systemImage: "checkmark.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.green)
                     }
 
                     Button {
                         showRoomPlan = true
                     } label: {
                         Label(
-                            session.roomPlanJSON == nil ? "Start RoomPlan LiDAR Scan" : "Rescan with RoomPlan",
+                            session.roomPlanJSON == nil ? "Scan room" : "Rescan",
                             systemImage: "camera.metering.matrix"
                         )
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                     .disabled(!RoomPlanCoordinator.isSupported)
 
                     if !RoomPlanCoordinator.isSupported {
-                        Text("This device doesn’t support RoomPlan. RealityCart requires a LiDAR iPhone/iPad Pro.")
+                        Text("RoomPlan needs a LiDAR iPhone or iPad Pro.")
                             .font(.footnote)
                             .foregroundStyle(.orange)
                     }
 
-                    if session.roomPlanJSON != nil {
-                        Label("RoomPlan LiDAR data attached", systemImage: "checkmark.seal.fill")
-                            .foregroundStyle(.green)
-
+                    if canContinue {
                         Button {
                             showScanViewer = true
                         } label: {
-                            Label("View RoomPlan 3D scan", systemImage: "cube.transparent")
+                            Label("Review 3D scan", systemImage: "cube.transparent")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
-                    }
+                        .controlSize(.large)
 
-                    Button("Continue to intent") {
-                        onContinue()
+                        Button {
+                            onContinue()
+                        } label: {
+                            Text("Continue")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canContinue)
                 }
                 .padding()
             }
             .navigationTitle("Capture")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Image("Logo")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 28, height: 28)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .accessibilityLabel("RealityCart")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showHistory = true
+                    } label: {
+                        Image(systemName: "clock")
+                    }
+                    .accessibilityLabel("Past scans")
+                }
+            }
+            .sheet(isPresented: $showHistory) {
+                DesignHistorySheet { onOpenSaved() }
+            }
+            .onAppear {
+                session.reloadHistory()
+            }
             .fullScreenCover(isPresented: $showRoomPlan) {
                 RoomPlanScanView { result in
                     if let image = result.image {
@@ -92,7 +125,6 @@ struct CaptureView: View {
                     session.roomPlanJSON = result.json
                     session.roomPlanUSDZURL = result.usdzURL
                     showRoomPlan = false
-                    // Open viewer right after accepting the scan.
                     showScanViewer = true
                 } onCancel: {
                     showRoomPlan = false

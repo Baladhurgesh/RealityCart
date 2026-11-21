@@ -57,25 +57,24 @@ struct Preview3DView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
 
-                    VStack(spacing: 8) {
-                        Text(hintText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity)
-
+                    VStack(spacing: 6) {
                         Picker("Mode", selection: $mode) {
                             ForEach(PreviewMode.allCases) { item in
                                 Text(item.rawValue).tag(item)
                             }
                         }
                         .pickerStyle(.segmented)
+
+                        Text(hintText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
                     .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 10)
+                    .padding(.top, 8)
+                    .padding(.bottom, 8)
                     .frame(maxWidth: .infinity)
-                    .background(.bar)
+                    .background(.ultraThinMaterial)
                     .padding(.bottom, tabBarClearance)
                 }
             } else {
@@ -90,13 +89,13 @@ struct Preview3DView: View {
 
     private var hintText: String {
         if session.modelStatus.values.contains("generating") {
-            return "Building a 3D model from the product photo. The size box stays until it is ready."
+            return "Building product 3D models…"
         }
         switch mode {
         case .photoOverlay:
-            return "Drag with one finger to orbit · Pinch to zoom · Use two fingers to pan"
+            return "Drag to orbit · Pinch to zoom"
         case .liveAR:
-            return "Aim at the floor · Drag with one finger to move · Twist with two fingers to rotate"
+            return "Point at the floor · Drag to move · Twist with two fingers to rotate"
         }
     }
 }
@@ -372,6 +371,7 @@ enum ProductModelInstaller {
                 for child in loaded.rootNode.childNodes {
                     wrapper.addChildNode(child.clone())
                 }
+                Self.alignUp(wrapper)
                 let (minB, maxB) = wrapper.boundingBox
                 let dx = max(maxB.x - minB.x, 0.001)
                 let dy = max(maxB.y - minB.y, 0.001)
@@ -412,7 +412,8 @@ enum ProductModelInstaller {
             do {
                 let local = try await ProductModelCache.localFile(for: remote)
                 let model = try await Entity.load(contentsOf: local)
-                let bounds = model.visualBounds(relativeTo: model)
+                alignUp(model)
+                var bounds = model.visualBounds(relativeTo: model)
                 if let fit {
                     model.scale = SIMD3<Float>(
                         fit.width / max(bounds.extents.x, 0.001),
@@ -425,11 +426,12 @@ enum ProductModelInstaller {
                         model.scale *= SIMD3<Float>(repeating: 0.9 / extent)
                     }
                 }
-                let fitted = model.visualBounds(relativeTo: model)
-                model.position.y -= fitted.min.y
-                let top = fit?.height ?? model.visualBounds(relativeTo: nil).extents.y
+                bounds = model.visualBounds(relativeTo: model)
+                model.position.y -= bounds.min.y
+                let top = fit?.height ?? bounds.extents.y
                 await MainActor.run {
                     entity.children.removeAll()
+                    stripCollisions(model)
                     entity.addChild(model)
                     let marker = ModelEntity(
                         mesh: .generateSphere(radius: 0.035),
@@ -446,6 +448,39 @@ enum ProductModelInstaller {
             } catch {
                 // Size box remains visible.
             }
+        }
+    }
+
+    /// Generated meshes sometimes arrive pitched or upside down. Stand them on +Y, then seat the base at y = 0.
+    private static func alignUp(_ entity: Entity) {
+        let probe = entity.children.first ?? entity
+        let basis = probe === entity ? matrix_identity_float4x4 : probe.transform.matrix
+        let yAxis = basis.columns.1
+        let zAxis = basis.columns.2
+        if yAxis.y < -0.5 {
+            entity.orientation = simd_quatf(angle: .pi, axis: [1, 0, 0]) * entity.orientation
+        } else if abs(zAxis.y) > abs(yAxis.y) + 0.25 {
+            let angle: Float = zAxis.y > 0 ? -.pi / 2 : .pi / 2
+            entity.orientation = simd_quatf(angle: angle, axis: [1, 0, 0]) * entity.orientation
+        }
+    }
+
+    private static func alignUp(_ node: SCNNode) {
+        let probe = node.childNodes.first ?? node
+        let up = probe.simdConvertVector(simd_float3(0, 1, 0), to: node.parent)
+        let forward = probe.simdConvertVector(simd_float3(0, 0, 1), to: node.parent)
+        if up.y < -0.5 {
+            node.simdOrientation = simd_quatf(angle: .pi, axis: [1, 0, 0]) * node.simdOrientation
+        } else if abs(forward.y) > abs(up.y) + 0.25 {
+            let angle: Float = forward.y > 0 ? -.pi / 2 : .pi / 2
+            node.simdOrientation = simd_quatf(angle: angle, axis: [1, 0, 0]) * node.simdOrientation
+        }
+    }
+
+    static func stripCollisions(_ entity: Entity) {
+        entity.components.remove(CollisionComponent.self)
+        for child in entity.children {
+            stripCollisions(child)
         }
     }
 }
@@ -540,6 +575,10 @@ struct LiveARPlacementView: UIViewRepresentable {
         config.planeDetection = [.horizontal]
         config.environmentTexturing = .automatic
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        let rotation = UIRotationGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.rotate(_:)))
+        rotation.delegate = context.coordinator
+        view.addGestureRecognizer(rotation)
+        context.coordinator.view = view
         context.coordinator.build(on: view, placements: placements, extraModelURLs: extraModelURLs)
         return view
     }
@@ -554,9 +593,46 @@ struct LiveARPlacementView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    final class Coordinator {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var signature = ""
+        weak var view: ARView?
         private var anchor: AnchorEntity?
+        private var rotating: Entity?
+        private var baseOrientation = simd_quatf()
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        /// Yaw only, around the floor normal, so a twist cannot flip a product over.
+        @objc func rotate(_ gesture: UIRotationGestureRecognizer) {
+            guard let view else { return }
+            switch gesture.state {
+            case .began:
+                guard let hit = view.entity(at: gesture.location(in: view)),
+                      let root = placementRoot(from: hit) else { return }
+                rotating = root
+                baseOrientation = root.orientation
+            case .changed:
+                guard let rotating else { return }
+                let yaw = simd_quatf(angle: -Float(gesture.rotation), axis: [0, 1, 0])
+                rotating.orientation = yaw * baseOrientation
+            default:
+                rotating = nil
+            }
+        }
+
+        private func placementRoot(from entity: Entity) -> Entity? {
+            var current: Entity? = entity
+            while let node = current {
+                if node.name == "placement" { return node }
+                current = node.parent
+            }
+            return nil
+        }
 
         func build(on view: ARView, placements: [PlacedProductDTO], extraModelURLs: [String: String]) {
             signature = placements.map {
@@ -567,7 +643,7 @@ struct LiveARPlacementView: UIViewRepresentable {
             }
 
             let root = AnchorEntity(
-                .plane(.horizontal, classification: .any, minimumBounds: [0.35, 0.35])
+                .plane(.horizontal, classification: .floor, minimumBounds: [0.2, 0.2])
             )
             view.scene.addAnchor(root)
             anchor = root
@@ -588,11 +664,12 @@ struct LiveARPlacementView: UIViewRepresentable {
                 }
                 let x = Float(placement.position?.x ?? Double(index) * 0.35 - 0.35)
                 let z = Float(placement.position?.z ?? 0)
-                entity.position = SIMD3<Float>(x, 0.02, z)
+                entity.name = "placement"
+                entity.position = SIMD3<Float>(x, 0, z)
 
                 // Gestures attach to this entity; collision must live on it too.
-                // recursive generateCollisionShapes puts shapes on children only for
-                // composite proxies (lamp/plant), so rotation/translation never fire.
+                // Child meshes (and a loaded USDZ) steal the hit if they keep their own shapes.
+                ProductModelInstaller.stripCollisions(entity)
                 Self.installRootCollision(on: entity)
 
                 root.addChild(entity)
@@ -605,8 +682,8 @@ struct LiveARPlacementView: UIViewRepresentable {
                         }
                     )
                 }
-                // Rotation is a two-finger twist on the entity (after collision is on the root).
-                _ = view.installGestures([.translation, .rotation], for: entity)
+                // One finger slides on the floor. Twist is a separate yaw-only recognizer.
+                _ = view.installGestures([.translation], for: entity)
             }
         }
 

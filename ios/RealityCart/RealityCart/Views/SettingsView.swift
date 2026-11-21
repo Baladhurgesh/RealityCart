@@ -7,7 +7,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Backend") {
+                Section {
                     TextField("API base URL", text: $session.apiBaseURL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
@@ -17,37 +17,32 @@ struct SettingsView: View {
                         .submitLabel(.done)
                         .onSubmit { urlFocused = false }
 
-                    Button("Check health") {
+                    Button("Check connection") {
                         urlFocused = false
                         Task { await session.checkHealth() }
                     }
+
                     if let health = session.health {
-                        LabeledContent("Status", value: health.status)
+                        LabeledContent("API", value: health.status)
                         LabeledContent(
                             "Gemini",
-                            value: health.gemini_configured ? "configured" : "missing key"
+                            value: health.gemini_configured ? "Ready" : "Missing key"
                         )
-                        ForEach(health.models.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
-                            LabeledContent(key, value: value)
-                        }
+                    } else {
+                        Text(session.statusMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                    Text(session.statusMessage)
+                } header: {
+                    Text("Backend")
+                } footer: {
+                    Text("Use your Mac’s LAN IP when testing on a phone.")
+                }
+
+                Section("Tips") {
+                    Text("Scan → Intent → Plan → 3D. Add products to the cart, then pay from the cart sheet.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                }
-
-                Section("Model jobs") {
-                    Text("Hydrogen — scene parse from photo + RoomPlan")
-                    Text("Carbon — shopping plan + re-plan after failures")
-                    Text("Decision 1 — fit / style / budget gates")
-                    Text("Shopify Catalog MCP — real product discovery")
-                }
-
-                Section("Demo tip") {
-                    Text(
-                        "Say: “Make this living room feel minimalist for $600. Keep my sofa, add a floor lamp and storage, mostly black.”"
-                    )
-                    .font(.footnote)
                 }
             }
             .dismissKeyboardToolbar()
