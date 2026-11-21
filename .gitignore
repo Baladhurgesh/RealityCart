@@ -1,0 +1,21 @@
+# Python
+backend/.venv/
+backend/**/__pycache__/
+backend/.env
+*.pyc
+.pytest_cache/
+
+# Xcode
+ios/**/xcuserdata/
+ios/**/DerivedData/
+*.xcuserstate
+*.moved-aside
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Captures may contain personal photos — keep folder, ignore contents
+eval/captures/*
+!eval/captures/.gitkeep
