@@ -174,6 +174,16 @@ class CheckoutLink(BaseModel):
     url: str
 
 
+class CartCheckoutItem(BaseModel):
+    shop: str
+    variant_id: str
+    quantity: int = 1
+
+
+class CartCheckoutResult(BaseModel):
+    checkouts: list[CheckoutSession] = Field(default_factory=list)
+
+
 class CheckoutSession(BaseModel):
     id: str
     status: str

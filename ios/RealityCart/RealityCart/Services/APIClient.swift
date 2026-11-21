@@ -146,6 +146,22 @@ final class APIClient {
         return try JSONDecoder().decode(ModelJobDTO.self, from: data)
     }
 
+    func startCartCheckout(items: [CartLine]) async throws -> [CheckoutSessionDTO] {
+        let url = baseURL.appendingPathComponent("v1/checkout/cart")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: Any] = [
+            "items": items.map {
+                ["shop": $0.shop, "variant_id": $0.variantID, "quantity": $0.quantity]
+            }
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Self.throwIfNeeded(response, data: data)
+        return try JSONDecoder().decode(CartCheckoutResponseDTO.self, from: data).checkouts
+    }
+
     func startCheckout(shop: String, variantID: String) async throws -> CheckoutSessionDTO {
         let url = baseURL.appendingPathComponent("v1/checkout")
         var request = URLRequest(url: url)

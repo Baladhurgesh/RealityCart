@@ -533,11 +533,16 @@ def _link_label(kind: str) -> str:
 async def create_shop_checkout(
     *,
     shop: str,
-    variant_id: str,
+    lines: list[tuple[str, int]] | None = None,
+    variant_id: str | None = None,
     quantity: int = 1,
     country: str | None = None,
 ) -> dict[str, Any]:
-    """Open a Shop MCP checkout. Does not place or pay for the order."""
+    """Open a Shop MCP checkout for one merchant. Does not place or pay for the order."""
+    if not lines:
+        if not variant_id:
+            raise ValueError("A variant is required")
+        lines = [(variant_id, quantity)]
     settings = get_settings()
     data, _ = await call_tool(
         "create_checkout",
@@ -545,7 +550,8 @@ async def create_shop_checkout(
             "shop": shop,
             "checkout": {
                 "line_items": [
-                    {"item": {"id": variant_id}, "quantity": max(1, quantity)}
+                    {"item": {"id": variant}, "quantity": max(1, qty)}
+                    for variant, qty in lines
                 ],
                 "context": {"address_country": country or settings.shopify_country},
             },
@@ -580,7 +586,7 @@ async def create_shop_checkout(
                     "url": link["url"],
                 }
             )
-    logger.info("checkout created status=%s shop=%s", data.get("status"), shop)
+    logger.info("checkout created status=%s shop=%s lines=%d", data.get("status"), shop, len(lines))
     return {
         "id": str(data.get("id") or ""),
         "status": str(data.get("status") or "incomplete"),

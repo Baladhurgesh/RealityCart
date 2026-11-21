@@ -145,6 +145,19 @@ struct CheckoutLinkDTO: Codable, Identifiable {
     let url: String
 }
 
+struct CartLine: Identifiable, Equatable {
+    var id: String { variantID }
+    let variantID: String
+    let shop: String
+    let title: String
+    let priceUSD: Double?
+    var quantity: Int
+}
+
+struct CartCheckoutResponseDTO: Decodable {
+    let checkouts: [CheckoutSessionDTO]
+}
+
 struct CheckoutSessionDTO: Codable, Identifiable {
     let id: String
     let status: String

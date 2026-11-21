@@ -15,6 +15,8 @@ from app.config import get_settings
 from app.meshy import ensure_model, get_model, usdz_path
 from app.pipeline import run_redesign
 from app.schemas import (
+    CartCheckoutItem,
+    CartCheckoutResult,
     CatalogPage,
     CheckoutSession,
     HealthResponse,
@@ -109,6 +111,31 @@ class CheckoutRequest(BaseModel):
     shop: str
     variant_id: str
     quantity: int = 1
+
+
+class CartCheckoutRequest(BaseModel):
+    items: list[CartCheckoutItem]
+
+
+@app.post("/v1/checkout/cart", response_model=CartCheckoutResult)
+async def checkout_cart(body: CartCheckoutRequest) -> CartCheckoutResult:
+    """One Shop checkout per merchant, with every cart line for that store."""
+    if not body.items:
+        raise HTTPException(status_code=400, detail="Cart is empty")
+    grouped: dict[str, list[tuple[str, int]]] = {}
+    for item in body.items:
+        if not item.shop or not item.variant_id:
+            raise HTTPException(status_code=400, detail="Each item needs shop and variant_id")
+        grouped.setdefault(item.shop, []).append((item.variant_id, item.quantity))
+    sessions = []
+    try:
+        for shop, lines in grouped.items():
+            payload = await create_shop_checkout(shop=shop, lines=lines)
+            sessions.append(CheckoutSession.model_validate(payload))
+    except Exception as exc:
+        logger.exception("Cart checkout failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return CartCheckoutResult(checkouts=sessions)
 
 
 @app.post("/v1/checkout", response_model=CheckoutSession)
