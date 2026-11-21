@@ -1,0 +1,86 @@
+{
+  "scene_type": "living_room",
+  "style_cues": [
+    "minimalist",
+    "modern",
+    "bright",
+    "empty"
+  ],
+  "palette": [
+    "white",
+    "light_wood",
+    "gray"
+  ],
+  "surfaces": [
+    {
+      "id": "floor",
+      "type": "horizontal_plane",
+      "label": "Wood floor",
+      "width_m": 5.0,
+      "depth_m": 4.0,
+      "height_m": 0.0,
+      "dimensions_source": "approximate",
+      "confidence": 0.3
+    }
+  ],
+  "objects": [],
+  "available_positions": [
+    {
+      "id": "slot_1_center",
+      "surface_id": "floor",
+      "region": "center",
+      "description": "Open center floor area",
+      "estimated_clearance_m": 3.0,
+      "suggested_categories": [
+        "rug",
+        "coffee_table",
+        "sofa"
+      ]
+    },
+    {
+      "id": "slot_2_back",
+      "surface_id": "floor",
+      "region": "back",
+      "description": "Along the back white wall",
+      "estimated_clearance_m": 4.0,
+      "suggested_categories": [
+        "sofa",
+        "console_table",
+        "bookshelf"
+      ]
+    },
+    {
+      "id": "slot_3_left",
+      "surface_id": "floor",
+      "region": "left",
+      "description": "Near the large window",
+      "estimated_clearance_m": 2.0,
+      "suggested_categories": [
+        "plant",
+        "armchair",
+        "floor_lamp"
+      ]
+    },
+    {
+      "id": "slot_4_right",
+      "surface_id": "floor",
+      "region": "right",
+      "description": "Along the right white wall",
+      "estimated_clearance_m": 3.0,
+      "suggested_categories": [
+        "tv_stand",
+        "sideboard",
+        "desk"
+      ]
+    }
+  ],
+  "clutter_level": "low",
+  "lighting": "natural",
+  "image_issues": [],
+  "notes": "Empty living room fixture (photo-only, approximate sizes).",
+  "warnings": [
+    "No RoomPlan scan \u2014 sizes are approximate. Scan with LiDAR for real scale."
+  ],
+  "latency_ms": 12271,
+  "model": "gemini-4-hydrogen"
+}

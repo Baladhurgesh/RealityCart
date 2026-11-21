@@ -298,6 +298,11 @@ _LABELED_RE = re.compile(
     rf"{_NUM}\s*({_UNIT})\s*([WwDdHhLl])\b",
     re.IGNORECASE,
 )
+# Label before the number: "Width 120cm", "Height: 30 in", "depth - 15.7\"".
+_WORD_LABELED_RE = re.compile(
+    rf"\b(width|depth|height|length)\b\s*[:\-=]?\s*{_NUM}\s*({_UNIT})",
+    re.IGNORECASE,
+)
 _TRIPLE_RE = re.compile(
     rf"{_NUM}\s*({_UNIT})?\s*[x×]\s*{_NUM}\s*({_UNIT})?\s*[x×]\s*{_NUM}\s*({_UNIT})",
     re.IGNORECASE,
@@ -352,6 +357,10 @@ def parse_dimensions_m(
         letter = match.group(3).upper()
         key = {"W": "w", "D": "d", "H": "h", "L": "l"}[letter]
         axes.setdefault(key, meters)
+    for match in _WORD_LABELED_RE.finditer(text):
+        meters = _unit_to_m(float(match.group(2)), match.group(3))
+        if meters is not None:
+            axes.setdefault(match.group(1)[0].lower(), meters)
     if "l" in axes and "w" not in axes:
         axes["w"] = axes["l"]
     elif "l" in axes and "d" not in axes:

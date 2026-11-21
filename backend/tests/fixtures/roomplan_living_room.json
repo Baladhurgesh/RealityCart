@@ -1,0 +1,26 @@
+{
+  "objects": [
+    {"id": "6A1F0C2E-1B7D-4C55-9E0A-1F2B3C4D5E01", "category": "sofa",
+     "dimensions": {"width": 2.12, "height": 0.86, "depth": 0.94},
+     "transform": {"tx": 0.05, "ty": -1.02, "tz": -1.55}, "confidence": "high"},
+    {"id": "6A1F0C2E-1B7D-4C55-9E0A-1F2B3C4D5E02", "category": "table",
+     "dimensions": {"width": 1.05, "height": 0.45, "depth": 0.55},
+     "transform": {"tx": 0.25, "ty": -1.225, "tz": -0.55}, "confidence": "high"},
+    {"id": "6A1F0C2E-1B7D-4C55-9E0A-1F2B3C4D5E03", "category": "storage",
+     "dimensions": {"width": 1.60, "height": 0.52, "depth": 0.40},
+     "transform": {"tx": 0.10, "ty": -1.19, "tz": 1.55}, "confidence": "medium"},
+    {"id": "6A1F0C2E-1B7D-4C55-9E0A-1F2B3C4D5E04", "category": "television",
+     "dimensions": {"width": 1.23, "height": 0.71, "depth": 0.08},
+     "transform": {"tx": 0.10, "ty": -0.55, "tz": 1.60}, "confidence": "high"},
+    {"id": "6A1F0C2E-1B7D-4C55-9E0A-1F2B3C4D5E05", "category": "chair",
+     "dimensions": {"width": 0.55, "height": 0.82, "depth": 0.58},
+     "transform": {"tx": -1.55, "ty": -1.04, "tz": 0.20}, "confidence": "low"}
+  ],
+  "walls": [
+    {"id": "W1", "category": "wall", "dimensions": {"width": 4.20, "height": 2.55, "depth": 0.0}, "transform": {"tx": 0.0, "ty": -0.175, "tz": -2.05}},
+    {"id": "W2", "category": "wall", "dimensions": {"width": 4.20, "height": 2.55, "depth": 0.0}, "transform": {"tx": 0.0, "ty": -0.175, "tz": 1.75}},
+    {"id": "W3", "category": "wall", "dimensions": {"width": 3.80, "height": 2.55, "depth": 0.0}, "transform": {"tx": -2.10, "ty": -0.175, "tz": -0.15}},
+    {"id": "W4", "category": "wall", "dimensions": {"width": 3.80, "height": 2.55, "depth": 0.0}, "transform": {"tx": 2.10, "ty": -0.175, "tz": -0.15}}
+  ],
+  "floors": []
+}

@@ -37,6 +37,22 @@ class Settings(BaseSettings):
     # meshy-6-lite is the fast textured preview used for the phone overlay.
     meshy_model: str = "meshy-6-lite"
 
+    # Carbon planner
+    plan_max_slots: int = 3  # each slot = 1 Shopify search + Decisions calls
+    plan_thinking_level: str = "low"
+    # Per-call model timeouts (s); a hung call is cancelled and retried once.
+    scene_timeout_s: float = 45.0
+    plan_timeout_s: float = 40.0
+
+    # Decisions gate
+    decision_timeout_s: float = 12.0
+    decision_candidates_per_slot: int = 3
+    decision_size_tolerance: float = 1.15  # product may exceed slot max by 15 % before precheck rejects
+    decision_use_product_image: bool = True
+    decision_use_room_image: bool = True
+    decision_room_image_side: int = 768
+    redesign_replan_rounds: int = 1  # Carbon re-plans *only* unfilled slots; 0 disables
+
     decision_fit_threshold: float = 0.55
     decision_style_threshold: float = 0.50
     decision_budget_threshold: float = 0.60

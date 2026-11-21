@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.gemini_plan import create_design_plan
+from app.gemini_scene import analyze_scene
 from app.meshy import ensure_model, get_model, usdz_path
 from app.pipeline import run_redesign
 from app.schemas import (
@@ -19,10 +21,13 @@ from app.schemas import (
     CartCheckoutResult,
     CatalogPage,
     CheckoutSession,
+    DesignPlan,
     HealthResponse,
+    PlanRequest,
     ProductOffer,
     RedesignResponse,
     RoomPlanPayload,
+    SceneAnalysis,
     SurfaceCalibration,
 )
 from app.shopify_mcp import create_shop_checkout, get_product, search_catalog_page
@@ -221,19 +226,43 @@ async def redesign(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@app.post("/v1/scene", response_model=RedesignResponse)
+@app.post("/v1/plan", response_model=DesignPlan)
+async def plan_only(req: PlanRequest) -> DesignPlan:
+    """Carbon design plan from a scene JSON (e.g. a saved /v1/scene result). For testing step 3."""
+    return await create_design_plan(req.scene, intent_text=req.intent_text, budget_usd=req.budget_usd)
+
+
+@app.post("/v1/scene", response_model=SceneAnalysis)
 async def scene_only(
-    image: Annotated[UploadFile, File()],
-    intent_text: Annotated[str, Form()] = "",
-    budget_usd: Annotated[float, Form()] = 600.0,
+    image: Annotated[UploadFile, File(description="Primary room photo")],
     room_plan_json: Annotated[str | None, Form()] = None,
     calibration_json: Annotated[str | None, Form()] = None,
-) -> RedesignResponse:
-    """Debug helper: run full pipeline (same as redesign)."""
-    return await redesign(
-        image=image,
-        intent_text=intent_text or "Analyze this space",
-        budget_usd=budget_usd,
-        room_plan_json=room_plan_json,
-        calibration_json=calibration_json,
+    intent_text: Annotated[str | None, Form()] = None,
+    extra_images: Annotated[list[UploadFile] | None, File(description="Optional extra keyframes (max 3)")] = None,
+) -> SceneAnalysis:
+    """Hydrogen scene parse only (no planning / shopping). For testing step 2."""
+    raw = await image.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+    try:
+        room_plan = RoomPlanPayload.model_validate(json.loads(room_plan_json)) if room_plan_json else None
+        calibration = (
+            SurfaceCalibration.model_validate(json.loads(calibration_json)) if calibration_json else None
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON form field: {exc}") from exc
+
+    extras = []
+    for f in (extra_images or [])[:3]:
+        data = await f.read()
+        if data:
+            extras.append((data, f.content_type or "image/jpeg"))
+
+    return await analyze_scene(
+        raw,
+        mime_type=image.content_type or "image/jpeg",
+        room_plan=room_plan,
+        calibration=calibration,
+        intent_hint=intent_text,
+        extra_images=extras,
     )

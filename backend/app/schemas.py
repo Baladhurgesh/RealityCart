@@ -61,6 +61,13 @@ class SceneObject(BaseModel):
     height_m: float | None = None
     keep: bool = True
     notes: str | None = None
+    # Added for Hydrogen v2 — all optional so older clients keep decoding.
+    dimensions_source: DimensionsSource | None = None
+    roomplan_id: str | None = None  # original CapturedRoom UUID
+    position_m: dict[str, float] | None = None  # {x, y, z}; y = height of base above floor
+    color: str | None = None
+    material: str | None = None
+    visible_in_photo: bool | None = None
 
 
 class AvailablePosition(BaseModel):
@@ -69,17 +76,22 @@ class AvailablePosition(BaseModel):
     region: str
     description: str | None = None
     estimated_clearance_m: float | None = None
+    suggested_categories: list[str] = Field(default_factory=list)
 
 
 class SceneAnalysis(BaseModel):
     scene_type: str = "unknown"
     style_cues: list[str] = Field(default_factory=list)
+    palette: list[str] = Field(default_factory=list)
     surfaces: list[Surface] = Field(default_factory=list)
     objects: list[SceneObject] = Field(default_factory=list)
     available_positions: list[AvailablePosition] = Field(default_factory=list)
     clutter_level: Literal["low", "medium", "high"] = "medium"
-    lighting: Literal["bright", "dim", "mixed", "unknown"] = "unknown"
+    lighting: Literal["bright", "dim", "mixed", "natural", "unknown"] = "unknown"
+    image_issues: list[str] = Field(default_factory=list)
     notes: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    latency_ms: int | None = None
     model: str = "gemini-4-hydrogen"
 
 
@@ -113,6 +125,9 @@ class PlacementSlot(BaseModel):
     max_height_m: float | None = None
     reason: str | None = None
     proxy_model: str | None = None
+    # Carbon v2 — optional so older clients keep decoding.
+    position_id: str | None = None  # scene.available_positions[].id this slot fills
+    priority: int | None = None  # 1 = must-have … 3 = nice-to-have
 
 
 class DesignPlan(BaseModel):
@@ -123,6 +138,18 @@ class DesignPlan(BaseModel):
     remove_object_ids: list[str] = Field(default_factory=list)
     slots: list[PlacementSlot] = Field(default_factory=list)
     model: str = "gemini-4-carbon"
+    color_direction: list[str] = Field(default_factory=list)
+    allocated_usd: float = 0.0  # sum of slot price caps
+    warnings: list[str] = Field(default_factory=list)
+    latency_ms: int | None = None
+
+
+class PlanRequest(BaseModel):
+    """POST /v1/plan body — plan from an existing scene (e.g. a saved /v1/scene result)."""
+
+    scene: SceneAnalysis
+    intent_text: str
+    budget_usd: float = Field(gt=0)
 
 
 class ProductVariant(BaseModel):
@@ -217,6 +244,17 @@ class DecisionResult(BaseModel):
     confidence: float
     accepted: bool
     reason: str
+    # Decisions v2 — optional so older clients keep decoding.
+    source: Literal["decisions_api", "precheck", "heuristic"] = "decisions_api"
+    reasons: list[str] = Field(default_factory=list)  # human-readable, e.g. "too wide: 0.88 m vs 0.50 m max"
+    rank_score: float | None = None  # used to pick the best of several accepted candidates
+    used_images: list[str] = Field(default_factory=list)  # "product", "room"
+
+
+class CandidateEvaluation(BaseModel):
+    product: ProductOffer
+    decision: DecisionResult
+    query: str
 
 
 class PlacedProduct(BaseModel):
@@ -230,6 +268,15 @@ class PlacedProduct(BaseModel):
     )
     scale: float = 1.0
     rejected_alternatives: list[ProductOffer] = Field(default_factory=list)
+    evaluated: list[CandidateEvaluation] = Field(default_factory=list)
+    queries_tried: list[str] = Field(default_factory=list)
+
+
+class UnfilledSlot(BaseModel):
+    slot: PlacementSlot
+    reasons: list[str] = Field(default_factory=list)
+    evaluated: list[CandidateEvaluation] = Field(default_factory=list)
+    queries_tried: list[str] = Field(default_factory=list)
 
 
 class PipelineStep(BaseModel):
@@ -247,6 +294,7 @@ class RedesignResponse(BaseModel):
     remaining_budget_usd: float = 0.0
     steps: list[PipelineStep] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    unfilled_slots: list[UnfilledSlot] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):

@@ -1,16 +1,38 @@
-"""gemini-4-hydrogen: multimodal space/room scene parser."""
+"""gemini-4-hydrogen: multimodal scene parser (photo + RoomPlan → SceneAnalysis).
+
+Division of labour
+------------------
+* ``scene_geometry`` (no LLM) owns every number that came from LiDAR:
+  room footprint, object sizes, surface heights.
+* Hydrogen owns semantics: what kind of room, style/palette, which measured
+  objects are visible and what they look like, small items LiDAR misses
+  (plants, lamps, cups), free regions to place things, and image problems.
+
+Hydrogen may only reference surface ids we hand it; anything else is remapped
+and logged in ``scene.warnings`` (Element 119: show where it breaks).
+"""
 
 from __future__ import annotations
 
+import asyncio
+import io
 import json
 import logging
-from typing import Any
+import time
+from typing import Literal
 
 from google.genai import types
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from app.config import get_settings
 from app.gemini_client import get_genai_client
+from app.scene_geometry import (
+    FLOOR_ID,
+    MeasuredRoom,
+    describe_for_prompt,
+    measure_room,
+    measured_scene_objects,
+)
 from app.schemas import (
     AvailablePosition,
     DimensionsSource,
@@ -23,255 +45,318 @@ from app.schemas import (
 
 logger = logging.getLogger(__name__)
 
-SCENE_SCHEMA_HINT = """
-Return ONLY valid JSON matching this shape:
-{
-  "scene_type": "living_room",
-  "style_cues": ["minimalist", "warm"],
-  "surfaces": [
-    {
-      "id": "primary_surface",
-      "type": "horizontal_plane",
-      "label": "floor_or_table",
-      "width_m": 3.2,
-      "depth_m": 2.4,
-      "height_m": 0.0,
-      "dimensions_source": "inferred",
-      "confidence": 0.4
-    }
-  ],
-  "objects": [
-    {
-      "id": "sofa_1",
-      "type": "sofa",
-      "label": "sofa",
-      "location": "against_wall",
-      "surface_id": "primary_surface",
-      "keep": true,
-      "notes": null
-    }
-  ],
-  "available_positions": [
-    {
-      "id": "slot_corner",
-      "surface_id": "primary_surface",
-      "region": "left",
-      "description": "Open floor area for a floor lamp or plant",
-      "estimated_clearance_m": 0.8
-    }
-  ],
-  "clutter_level": "medium",
-  "lighting": "mixed",
-  "notes": "short note"
-}
+MAX_IMAGE_SIDE = 1536
+Region = Literal["left", "right", "center", "back", "front"]
+
+
+# --------------------------------------------------------------------------
+# Structured-output schema Hydrogen must follow (enforced by Gemini).
+# --------------------------------------------------------------------------
+
+
+class HMeasuredObjectNote(BaseModel):
+    ref: str = Field(description="Exact ref from the measured-objects list, e.g. rp_1")
+    visible_in_photo: bool
+    color: str | None = None
+    material: str | None = None
+    keep: bool = Field(description="False only if it is clutter or clearly unwanted")
+    notes: str | None = None
+
+
+class HExtraObject(BaseModel):
+    type: str = Field(description="snake_case noun, e.g. plant, floor_lamp, cup, rug, curtain")
+    label: str
+    surface_id: str = Field(description="One of the allowed surface ids")
+    location: str | None = Field(default=None, description="e.g. 'on coffee table, center'")
+    color: str | None = None
+    approx_width_m: float | None = None
+    approx_height_m: float | None = None
+    keep: bool = True
+
+
+class HPosition(BaseModel):
+    surface_id: str = Field(description="One of the allowed surface ids")
+    region: Region
+    description: str
+    estimated_clearance_m: float | None = None
+    suggested_categories: list[str] = Field(default_factory=list)
+
+
+class HSurfaceEstimate(BaseModel):
+    id: str
+    label: str
+    approx_width_m: float | None = None
+    approx_depth_m: float | None = None
+    approx_height_m: float | None = None
+
+
+class HydrogenOutput(BaseModel):
+    scene_type: Literal[
+        "living_room", "bedroom", "kitchen", "home_office", "dining_room",
+        "studio", "bathroom", "hallway", "unknown",
+    ]
+    style_cues: list[str] = Field(description="2-5 short style words")
+    palette: list[str] = Field(description="Dominant colors, e.g. mustard, charcoal, white")
+    lighting: Literal["bright", "dim", "mixed", "natural", "unknown"]
+    clutter_level: Literal["low", "medium", "high"]
+    image_issues: list[str] = Field(
+        default_factory=list,
+        description="Problems limiting analysis: dim, blurry, partial_view, cluttered, occluded, odd_angle",
+    )
+    # Field order matters: Gemini emits in schema order, so surface ids are
+    # defined before anything references them. Lists below are *required*
+    # (no default) — optional lists get silently omitted by the model.
+    surface_estimates: list[HSurfaceEstimate] = Field(
+        description="ONLY when no measured surfaces are given: rough surfaces you can see; else []",
+    )
+    measured_objects: list[HMeasuredObjectNote]
+    extra_objects: list[HExtraObject]
+    available_positions: list[HPosition]
+    notes: str | None = None
+
+
+PROMPT = """You are the scene parser for RealityCart, a shopping redesign app.
+Analyze the photo of an indoor space (any room type — do not assume a desk).
+
+Trusted LiDAR measurements (RoomPlan) for this same room:
+{measurements}
+
+Allowed surface ids: {surface_ids}
+
 Rules:
-- The space can be ANY indoor scene: living room, bedroom, kitchen, office, studio, hallway, etc.
-- Prefer RoomPlan LiDAR measurements over guessing meters.
-- If dimensions are unknown, set dimensions_source to "approximate" and lower confidence.
-- Identify empty regions suitable for furniture and decor that match the space type.
-- Mark major existing furniture the user would likely keep as keep=true unless clearly disposable clutter.
-- Use scene_type values like living_room, bedroom, kitchen, home_office, dining_room, studio, unknown.
+- NEVER invent or change measured sizes; LiDAR numbers are ground truth.
+- measured_objects: one entry per measured ref above. visible_in_photo=false if it is
+  outside the photo (the scan covers the whole room, the photo may not).
+- extra_objects: visible items LiDAR does not measure (plants, lamps, decor, rugs,
+  curtains, small electronics). Use only allowed surface ids.
+- available_positions: 2-5 open spots where a new item could realistically go,
+  each on an allowed surface id. Prefer spots visible in the photo.
+- image_issues: be honest about dim light, blur, clutter or partial views.
+{mode_rules}{intent}"""
+
+NO_LIDAR_RULES = """
+NO LIDAR SCAN for this request, so:
+- First fill surface_estimates (always include id "floor", plus visible tables,
+  shelves, counters) with rough sizes. These ids are now the allowed surface ids.
+- extra_objects must list ALL visible items INCLUDING major furniture (sofa, bed,
+  table, TV...), each referencing one of your surface_estimates ids.
+- available_positions are still required (2-5), on your surface_estimates ids.
 """
 
-# RoomPlan furniture categories that often define a usable primary plane.
-_PRIMARY_FURNITURE = {
-    "table",
-    "desk",
-    "diningtable",
-    "sofa",
-    "couch",
-    "bed",
-    "storage",
-    "chair",
-    "refrigerator",
-    "oven",
-    "stove",
-    "dishwasher",
-    "washer",
-    "dryer",
-    "television",
-    "fireplace",
-}
+
+# --------------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------------
 
 
-def _merge_measurements(
-    scene: SceneAnalysis,
+def prepare_image(data: bytes, mime_type: str = "image/jpeg", max_side: int = MAX_IMAGE_SIDE) -> tuple[bytes, str]:
+    """EXIF-rotate and downscale so uploads are fast and orientation is right."""
+    try:
+        from PIL import Image, ImageOps
+
+        img = Image.open(io.BytesIO(data))
+        img = ImageOps.exif_transpose(img).convert("RGB")
+        if max(img.size) > max_side:
+            img.thumbnail((max_side, max_side))
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=85)
+        return out.getvalue(), "image/jpeg"
+    except Exception as exc:  # noqa: BLE001 — unknown format: send as-is
+        logger.warning("Image preprocessing skipped: %s", exc)
+        return data, mime_type
+
+
+def _calibrated(surfaces: list[Surface], calibration: SurfaceCalibration | None) -> list[Surface]:
+    if not calibration or not calibration.width_m:
+        return surfaces
+    update = {
+        "width_m": calibration.width_m,
+        "depth_m": calibration.depth_m,
+        "height_m": calibration.height_m,
+        "dimensions_source": DimensionsSource.user_measurement,
+        "confidence": 0.95,
+    }
+    for i, s in enumerate(surfaces):
+        if s.id == calibration.surface_id:
+            surfaces[i] = s.model_copy(update={k: v for k, v in update.items() if v is not None})
+            return surfaces
+    return [
+        Surface(id=calibration.surface_id, label="calibrated_surface", **{**update, "height_m": calibration.height_m or 0.0}),
+        *surfaces,
+    ]
+
+
+def build_scene(
+    hydro: HydrogenOutput | None,
+    room: MeasuredRoom,
     calibration: SurfaceCalibration | None,
-    room_plan: RoomPlanPayload | None,
+    *,
+    model: str,
+    warnings: list[str] | None = None,
 ) -> SceneAnalysis:
-    """Override Gemini guesses with trusted measurements."""
-    surfaces = list(scene.surfaces)
+    """Merge trusted geometry with Hydrogen semantics. Pure function — unit tested."""
+    warnings = list(room.warnings) + list(warnings or [])
+    surfaces = list(room.surfaces)
 
-    if calibration and calibration.width_m:
-        sid = calibration.surface_id or "primary_surface"
-        found = False
-        for i, s in enumerate(surfaces):
-            if s.id == sid or s.type == "horizontal_plane":
-                surfaces[i] = s.model_copy(
-                    update={
-                        "width_m": calibration.width_m,
-                        "depth_m": calibration.depth_m or s.depth_m,
-                        "height_m": calibration.height_m if calibration.height_m is not None else s.height_m,
-                        "dimensions_source": DimensionsSource.user_measurement,
-                        "confidence": 0.95,
-                    }
-                )
-                found = True
-                break
-        if not found:
-            surfaces.insert(
-                0,
+    if not surfaces and hydro and hydro.surface_estimates:
+        for est in hydro.surface_estimates:
+            surfaces.append(
                 Surface(
-                    id=sid,
-                    type="horizontal_plane",
-                    label="primary_surface",
-                    width_m=calibration.width_m,
-                    depth_m=calibration.depth_m,
-                    height_m=calibration.height_m or 0.0,
-                    dimensions_source=DimensionsSource.user_measurement,
-                    confidence=0.95,
-                ),
+                    id=est.id,
+                    label=est.label,
+                    width_m=est.approx_width_m,
+                    depth_m=est.approx_depth_m,
+                    height_m=0.0 if est.id == FLOOR_ID else est.approx_height_m,
+                    dimensions_source=DimensionsSource.approximate,
+                    confidence=0.3,
+                )
+            )
+    surfaces = _calibrated(surfaces, calibration)
+    if not surfaces:
+        surfaces = [Surface(id=FLOOR_ID, label="floor", height_m=0.0, confidence=0.1)]
+        warnings.append("No measurements at all — surface size unknown.")
+
+    valid_ids = {s.id for s in surfaces}
+    default_sid = FLOOR_ID if FLOOR_ID in valid_ids else surfaces[0].id
+
+    def fix_sid(sid: str | None, what: str) -> str:
+        if sid in valid_ids:
+            return sid  # type: ignore[return-value]
+        warnings.append(f"Hydrogen referenced unknown surface '{sid}' for {what}; used '{default_sid}'.")
+        return default_sid
+
+    # Measured objects enriched with what Hydrogen saw.
+    objects = measured_scene_objects(room)
+    by_ref = {o.id: o for o in objects}
+    if hydro:
+        seen = set()
+        for note in hydro.measured_objects:
+            obj = by_ref.get(note.ref)
+            if not obj:
+                warnings.append(f"Hydrogen described unknown measured object '{note.ref}'.")
+                continue
+            seen.add(note.ref)
+            obj.visible_in_photo = note.visible_in_photo
+            obj.color, obj.material, obj.keep = note.color, note.material, note.keep
+            obj.notes = "; ".join(x for x in (note.notes, obj.notes) if x) or None
+        missing = [r for r in by_ref if r not in seen]
+        if missing:
+            warnings.append(f"Hydrogen skipped measured objects: {', '.join(missing)}.")
+
+        counts: dict[str, int] = {}
+        for extra in hydro.extra_objects:
+            counts[extra.type] = counts.get(extra.type, 0) + 1
+            objects.append(
+                SceneObject(
+                    id=f"seen_{extra.type}_{counts[extra.type]}",
+                    type=extra.type,
+                    label=extra.label,
+                    location=extra.location,
+                    surface_id=fix_sid(extra.surface_id, extra.label),
+                    width_m=extra.approx_width_m,
+                    height_m=extra.approx_height_m,
+                    keep=extra.keep,
+                    color=extra.color,
+                    visible_in_photo=True,
+                    dimensions_source=DimensionsSource.approximate,
+                )
             )
 
-    if room_plan and room_plan.objects:
-        for obj in room_plan.objects:
-            dims = obj.get("dimensions") or {}
-            category = str(obj.get("category") or obj.get("type") or "furniture")
-            oid = str(obj.get("id") or category)
-            if not any(o.id == oid for o in scene.objects):
-                scene.objects.append(
-                    SceneObject(
-                        id=oid,
-                        type=category.lower(),
-                        label=category,
-                        width_m=_m(dims.get("width") or dims.get("x")),
-                        depth_m=_m(dims.get("depth") or dims.get("z")),
-                        height_m=_m(dims.get("height") or dims.get("y")),
-                        keep=True,
-                        notes="from_roomplan",
-                    )
+    positions: list[AvailablePosition] = []
+    if hydro:
+        for i, p in enumerate(hydro.available_positions, start=1):
+            positions.append(
+                AvailablePosition(
+                    id=f"slot_{i}_{p.region}",
+                    surface_id=fix_sid(p.surface_id, f"position {i}"),
+                    region=p.region,
+                    description=p.description,
+                    estimated_clearance_m=(
+                        p.estimated_clearance_m
+                        if p.estimated_clearance_m is None or p.estimated_clearance_m >= 0
+                        else None
+                    ),
+                    suggested_categories=p.suggested_categories,
                 )
-            # Promote large RoomPlan objects onto the primary surface when useful.
-            if category.lower().replace(" ", "") in _PRIMARY_FURNITURE:
-                w = _m(dims.get("width") or dims.get("x"))
-                d = _m(dims.get("depth") or dims.get("z"))
-                h = _m(dims.get("height") or dims.get("y"))
-                if w and surfaces:
-                    surfaces[0] = surfaces[0].model_copy(
-                        update={
-                            "width_m": w,
-                            "depth_m": d or surfaces[0].depth_m,
-                            "height_m": h if h is not None else surfaces[0].height_m,
-                            "dimensions_source": DimensionsSource.roomplan,
-                            "confidence": 0.9,
-                            "label": surfaces[0].label or category.lower(),
-                        }
-                    )
-
-    # Floor footprint from RoomPlan walls if we still lack a surface.
-    if room_plan and room_plan.walls and (not surfaces or surfaces[0].width_m is None):
-        widths = []
-        for wall in room_plan.walls:
-            dims = wall.get("dimensions") or {}
-            w = _m(dims.get("width") or dims.get("x"))
-            if w:
-                widths.append(w)
-        if widths:
-            approx = max(widths)
-            if not surfaces:
-                surfaces = [
-                    Surface(
-                        id="primary_surface",
-                        type="horizontal_plane",
-                        label="floor",
-                        width_m=approx,
-                        depth_m=approx * 0.75,
-                        height_m=0.0,
-                        dimensions_source=DimensionsSource.roomplan,
-                        confidence=0.7,
-                    )
-                ]
-            else:
-                surfaces[0] = surfaces[0].model_copy(
-                    update={
-                        "width_m": approx,
-                        "depth_m": surfaces[0].depth_m or approx * 0.75,
-                        "dimensions_source": DimensionsSource.roomplan,
-                        "confidence": 0.7,
-                    }
-                )
-
-    scene.surfaces = surfaces
-    if not scene.available_positions and surfaces:
-        scene.available_positions = [
-            AvailablePosition(
-                id="slot_left",
-                surface_id=surfaces[0].id,
-                region="left",
-                description="Open area on the left of the primary space",
-            ),
-            AvailablePosition(
-                id="slot_right",
-                surface_id=surfaces[0].id,
-                region="right",
-                description="Open area on the right of the primary space",
-            ),
+            )
+    if not positions:
+        positions = [
+            AvailablePosition(id="slot_left", surface_id=default_sid, region="left",
+                              description="Open area on the left (default)"),
+            AvailablePosition(id="slot_right", surface_id=default_sid, region="right",
+                              description="Open area on the right (default)"),
         ]
-    return scene
+        if hydro:
+            warnings.append("Hydrogen proposed no open positions; using defaults.")
+
+    if not room.objects:
+        warnings.append("No RoomPlan scan — sizes are approximate. Scan with LiDAR for real scale.")
+
+    return SceneAnalysis(
+        scene_type=hydro.scene_type if hydro else "unknown",
+        style_cues=hydro.style_cues if hydro else [],
+        palette=hydro.palette if hydro else [],
+        surfaces=surfaces,
+        objects=objects,
+        available_positions=positions,
+        clutter_level=hydro.clutter_level if hydro else "medium",
+        lighting=hydro.lighting if hydro else "unknown",
+        image_issues=hydro.image_issues if hydro else [],
+        notes=(hydro.notes if hydro else "Fallback scene — Hydrogen unavailable; geometry only."),
+        warnings=warnings,
+        model=model,
+    )
 
 
-def _m(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+async def _call_hydrogen(
+    images: list[tuple[bytes, str]],
+    room: MeasuredRoom,
+    intent_hint: str | None,
+) -> HydrogenOutput:
+    settings = get_settings()
+    client = get_genai_client()
+    surface_ids = room.surface_ids or ["(none — define them in surface_estimates)"]
+    prompt = PROMPT.format(
+        measurements=describe_for_prompt(room),
+        surface_ids=", ".join(surface_ids),
+        mode_rules="" if room.surfaces else NO_LIDAR_RULES,
+        intent=f"\nUser intent (context only, do not plan purchases): {intent_hint}" if intent_hint else "",
+    )
+    parts = [types.Part.from_bytes(data=b, mime_type=m) for b, m in images]
+    parts.append(types.Part.from_text(text=prompt))
+
+    response = await client.aio.models.generate_content(
+        model=settings.scene_model,
+        contents=parts,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=HydrogenOutput,
+            temperature=0.2,
+            thinking_config=types.ThinkingConfig(thinking_level="low"),
+        ),
+    )
+    if isinstance(response.parsed, HydrogenOutput):
+        return response.parsed
+    return HydrogenOutput.model_validate(json.loads(response.text or "{}"))
+
+
+# --------------------------------------------------------------------------
+# Public API
+# --------------------------------------------------------------------------
 
 
 def _fallback_scene(
     calibration: SurfaceCalibration | None,
     room_plan: RoomPlanPayload | None,
+    reason: str | None = None,
 ) -> SceneAnalysis:
-    width = calibration.width_m if calibration else None
-    scene = SceneAnalysis(
-        scene_type="unknown",
-        style_cues=["unknown"],
-        surfaces=[
-            Surface(
-                id="primary_surface",
-                type="horizontal_plane",
-                label="primary_space",
-                width_m=width or 3.0,
-                depth_m=(calibration.depth_m if calibration else 2.5),
-                height_m=(calibration.height_m if calibration else 0.0),
-                dimensions_source=(
-                    DimensionsSource.user_measurement
-                    if width
-                    else DimensionsSource.approximate
-                ),
-                confidence=0.9 if width else 0.2,
-            )
-        ],
-        objects=[],
-        available_positions=[
-            AvailablePosition(
-                id="slot_left",
-                surface_id="primary_surface",
-                region="left",
-                description="Left open area",
-            ),
-            AvailablePosition(
-                id="slot_right",
-                surface_id="primary_surface",
-                region="right",
-                description="Right open area",
-            ),
-        ],
-        notes="Fallback scene — Gemini unavailable or parse failed",
+    return build_scene(
+        None,
+        measure_room(room_plan),
+        calibration,
         model="fallback",
+        warnings=[f"Hydrogen failed: {reason}"] if reason else None,
     )
-    return _merge_measurements(scene, calibration, room_plan)
 
 
 async def analyze_scene(
@@ -281,62 +366,43 @@ async def analyze_scene(
     room_plan: RoomPlanPayload | None = None,
     calibration: SurfaceCalibration | None = None,
     intent_hint: str | None = None,
+    extra_images: list[tuple[bytes, str]] | None = None,
+    attempts: int = 2,
 ) -> SceneAnalysis:
     settings = get_settings()
+    started = time.perf_counter()
+    room = measure_room(room_plan)
+    images = [prepare_image(image_bytes, mime_type)]
+    images += [prepare_image(b, m) for b, m in (extra_images or [])][:3]
 
-    try:
-        client = get_genai_client()
-        parts: list[types.Part] = [
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            types.Part.from_text(
-                text=(
-                    "Analyze this indoor space (any room or area) for a furniture/decor "
-                    "shopping redesign. Do not assume it is a desk.\n"
-                    f"{SCENE_SCHEMA_HINT}\n"
-                )
-            ),
-        ]
-        if room_plan:
-            parts.append(
-                types.Part.from_text(
-                    text="RoomPlan LiDAR JSON (trusted dimensions):\n"
-                    + json.dumps(room_plan.model_dump(), default=str)[:12000]
-                )
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            hydro = await asyncio.wait_for(
+                _call_hydrogen(images, room, intent_hint), timeout=settings.scene_timeout_s
             )
-        if calibration:
-            parts.append(
-                types.Part.from_text(
-                    text="User surface calibration (trusted):\n"
-                    + calibration.model_dump_json()
-                )
+            scene = build_scene(hydro, room, calibration, model=settings.scene_model)
+            if attempt > 1:
+                scene.warnings.append(f"Hydrogen succeeded on retry {attempt} (first error: {last_error}).")
+            scene.latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.info(
+                "Hydrogen ok in %dms: type=%s objects=%d positions=%d warnings=%d",
+                scene.latency_ms, scene.scene_type, len(scene.objects),
+                len(scene.available_positions), len(scene.warnings),
             )
-        if intent_hint:
-            parts.append(types.Part.from_text(text=f"User intent hint: {intent_hint}"))
+            return scene
+        except (ValidationError, json.JSONDecodeError) as exc:
+            last_error = exc
+            logger.warning("Hydrogen attempt %d returned invalid JSON: %s", attempt, exc)
+        except TimeoutError:
+            last_error = TimeoutError(f"Hydrogen timed out after {settings.scene_timeout_s:.0f}s")
+            logger.warning("Hydrogen attempt %d timed out", attempt)
+        except Exception as exc:  # noqa: BLE001 — network / auth / quota
+            last_error = exc
+            logger.warning("Hydrogen attempt %d failed: %s", attempt, exc)
+            if "GEMINI_API_KEY" in str(exc):
+                break
 
-        logger.info("Hydrogen scene parse starting…")
-        response = client.models.generate_content(
-            model=settings.scene_model,
-            contents=parts,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                temperature=0.2,
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(
-                    disable=True
-                ),
-                thinking_config=types.ThinkingConfig(thinking_level="low"),
-            ),
-        )
-        text = response.text or "{}"
-        data = json.loads(text)
-        scene = SceneAnalysis.model_validate(data)
-        logger.info(
-            "Hydrogen scene ok: type=%s surfaces=%d objects=%d",
-            scene.scene_type,
-            len(scene.surfaces),
-            len(scene.objects),
-        )
-        scene.model = settings.scene_model
-        return _merge_measurements(scene, calibration, room_plan)
-    except (ValidationError, json.JSONDecodeError, Exception) as exc:
-        logger.exception("Hydrogen scene parse failed: %s", exc)
-        return _fallback_scene(calibration, room_plan)
+    scene = _fallback_scene(calibration, room_plan, reason=str(last_error)[:300])
+    scene.latency_ms = int((time.perf_counter() - started) * 1000)
+    return scene

@@ -1,0 +1,202 @@
+{
+  "scene_type": "living_room",
+  "style_cues": [
+    "cozy",
+    "modern"
+  ],
+  "palette": [
+    "mustard",
+    "charcoal",
+    "white"
+  ],
+  "surfaces": [
+    {
+      "id": "floor",
+      "type": "horizontal_plane",
+      "label": "floor",
+      "width_m": 4.2,
+      "depth_m": 3.8,
+      "height_m": 0.0,
+      "dimensions_source": "roomplan",
+      "confidence": 0.85
+    },
+    {
+      "id": "table_1_top",
+      "type": "horizontal_plane",
+      "label": "top of table (rp_2)",
+      "width_m": 1.05,
+      "depth_m": 0.55,
+      "height_m": 0.45,
+      "dimensions_source": "roomplan",
+      "confidence": 0.9
+    },
+    {
+      "id": "storage_1_top",
+      "type": "horizontal_plane",
+      "label": "top of storage (rp_3)",
+      "width_m": 1.6,
+      "depth_m": 0.4,
+      "height_m": 0.52,
+      "dimensions_source": "roomplan",
+      "confidence": 0.75
+    }
+  ],
+  "objects": [
+    {
+      "id": "rp_1",
+      "type": "sofa",
+      "label": "sofa",
+      "surface_id": "floor",
+      "width_m": 2.12,
+      "depth_m": 0.94,
+      "height_m": 0.86,
+      "keep": true,
+      "notes": "RoomPlan confidence: high",
+      "dimensions_source": "roomplan",
+      "roomplan_id": "6A1F0C2E-1B7D-4C55-9E0A-1F2B3C4D5E01",
+      "position_m": {
+        "x": 0.05,
+        "y": 0.0,
+        "z": -1.55
+      },
+      "color": "mustard",
+      "material": "velvet",
+      "visible_in_photo": true
+    },
+    {
+      "id": "rp_2",
+      "type": "table",
+      "label": "table",
+      "surface_id": "floor",
+      "width_m": 1.05,
+      "depth_m": 0.55,
+      "height_m": 0.45,
+      "keep": true,
+      "notes": "RoomPlan confidence: high",
+      "dimensions_source": "roomplan",
+      "roomplan_id": "6A1F0C2E-1B7D-4C55-9E0A-1F2B3C4D5E02",
+      "position_m": {
+        "x": 0.25,
+        "y": 0.0,
+        "z": -0.55
+      },
+      "color": "black",
+      "visible_in_photo": true
+    },
+    {
+      "id": "rp_3",
+      "type": "storage",
+      "label": "storage",
+      "surface_id": "floor",
+      "width_m": 1.6,
+      "depth_m": 0.4,
+      "height_m": 0.52,
+      "keep": true,
+      "notes": "RoomPlan confidence: medium",
+      "dimensions_source": "roomplan",
+      "roomplan_id": "6A1F0C2E-1B7D-4C55-9E0A-1F2B3C4D5E03",
+      "position_m": {
+        "x": 0.1,
+        "y": 0.0,
+        "z": 1.55
+      },
+      "visible_in_photo": false
+    },
+    {
+      "id": "rp_4",
+      "type": "television",
+      "label": "television",
+      "surface_id": "floor",
+      "width_m": 1.23,
+      "depth_m": 0.08,
+      "height_m": 0.71,
+      "keep": true,
+      "notes": "RoomPlan confidence: high",
+      "dimensions_source": "roomplan",
+      "roomplan_id": "6A1F0C2E-1B7D-4C55-9E0A-1F2B3C4D5E04",
+      "position_m": {
+        "x": 0.1,
+        "y": 0.545,
+        "z": 1.6
+      },
+      "visible_in_photo": false
+    },
+    {
+      "id": "rp_5",
+      "type": "chair",
+      "label": "chair",
+      "surface_id": "floor",
+      "width_m": 0.55,
+      "depth_m": 0.58,
+      "height_m": 0.82,
+      "keep": true,
+      "notes": "RoomPlan confidence: low",
+      "dimensions_source": "roomplan",
+      "roomplan_id": "6A1F0C2E-1B7D-4C55-9E0A-1F2B3C4D5E05",
+      "position_m": {
+        "x": -1.55,
+        "y": 0.0,
+        "z": 0.2
+      },
+      "visible_in_photo": false
+    },
+    {
+      "id": "seen_plant_1",
+      "type": "plant",
+      "label": "potted plant",
+      "surface_id": "table_1_top",
+      "keep": true,
+      "dimensions_source": "approximate",
+      "visible_in_photo": true
+    },
+    {
+      "id": "seen_curtain_1",
+      "type": "curtain",
+      "label": "grey curtain",
+      "surface_id": "floor",
+      "keep": true,
+      "dimensions_source": "approximate",
+      "visible_in_photo": true
+    }
+  ],
+  "available_positions": [
+    {
+      "id": "slot_1_left",
+      "surface_id": "floor",
+      "region": "left",
+      "description": "Beside the sofa",
+      "estimated_clearance_m": 0.6,
+      "suggested_categories": [
+        "floor_lamp",
+        "plant",
+        "side_table"
+      ]
+    },
+    {
+      "id": "slot_2_front",
+      "surface_id": "table_1_top",
+      "region": "front",
+      "description": "Front of coffee table",
+      "suggested_categories": [
+        "tray",
+        "book"
+      ]
+    },
+    {
+      "id": "slot_3_right",
+      "surface_id": "floor",
+      "region": "right",
+      "description": "Right of sofa near window",
+      "estimated_clearance_m": 0.8,
+      "suggested_categories": [
+        "plant",
+        "floor_lamp"
+      ]
+    }
+  ],
+  "clutter_level": "low",
+  "lighting": "natural",
+  "image_issues": [],
+  "warnings": [],
+  "model": "gemini-4-hydrogen"
+}
