@@ -6,13 +6,15 @@ enum APIError: LocalizedError {
     case badStatus(Int, String)
     case decoding(Error)
     case emptyImage
+    case missingRoomPlan
 
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "Invalid API URL"
         case .badStatus(let code, let body): return "HTTP \(code): \(body)"
         case .decoding(let err): return "Decode error: \(err.localizedDescription)"
-        case .emptyImage: return "Capture an image first — RealityCart is media-central."
+        case .emptyImage: return "Complete a RoomPlan LiDAR scan first — RealityCart is media-central."
+        case .missingRoomPlan: return "RoomPlan LiDAR data is required. Scan your space on a Pro device."
         }
     }
 }

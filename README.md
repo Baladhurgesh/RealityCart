@@ -1,14 +1,14 @@
 # RealityCart
 
-**Element 119 hackathon project** — turn a real desk/room capture into a budgeted, shoppable redesign using Gemini 4, the Decisions API, and Shopify Global Catalog MCP.
+**Element 119 hackathon project** — turn a real RoomPlan LiDAR scan of any indoor space into a budgeted, shoppable redesign using Gemini 4, the Decisions API, and Shopify Global Catalog MCP.
 
-> “Make this a minimalist developer setup for $600. Keep my monitor, add a lamp and storage, all black.”
+> “Make this living room feel minimalist for $600. Keep my sofa, add a floor lamp and storage, mostly black.”
 
 ## Architecture
 
 | Layer | Stack |
 | --- | --- |
-| iOS client | SwiftUI + RoomPlan (LiDAR) + RealityKit proxies + Speech |
+| iOS client | SwiftUI + RoomPlan LiDAR (Pro) + RealityKit proxies + Speech |
 | Backend | FastAPI |
 | Scene parse | `gemini-4-hydrogen` |
 | Design plan | `gemini-4-carbon` |
@@ -66,17 +66,15 @@ open RealityCart.xcodeproj
 ```
 
 1. Select your Team under Signing.
-2. Run on a simulator (photo + width) or LiDAR device (RoomPlan).
-3. Settings → set API base URL:
-   - Simulator: `http://127.0.0.1:8000`
-   - Physical device: `http://<your-mac-lan-ip>:8000`
+2. Run on a **LiDAR Pro** device (RoomPlan is required).
+3. Settings → set API base URL to `http://<your-mac-lan-ip>:8000`
 
 ### 3. Demo flow
 
-1. **Capture** — camera/library photo, or RoomPlan scan; set desk width/depth.
+1. **Capture** — RoomPlan LiDAR scan on an iPhone/iPad Pro (dimensions come from the scan).
 2. **Intent** — text or voice brief + budget.
 3. **Plan** — pipeline steps, scene objects (KEEP badges), Shopify products, budget meter.
-4. **3D** — RealityKit category proxies on the calibrated desk plane.
+4. **3D** — RealityKit category proxies scaled from RoomPlan.
 
 ## API
 

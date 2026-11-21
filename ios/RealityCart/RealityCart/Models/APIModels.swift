@@ -8,7 +8,7 @@ struct HealthResponse: Codable {
 }
 
 struct SurfaceCalibration: Codable {
-    var surface_id: String = "desk_surface"
+    var surface_id: String = "primary_surface"
     var width_m: Double?
     var depth_m: Double?
     var height_m: Double?

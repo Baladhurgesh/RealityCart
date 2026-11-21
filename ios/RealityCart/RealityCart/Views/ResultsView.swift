@@ -84,7 +84,7 @@ struct ResultsView: View {
                     ContentUnavailableView(
                         "No plan yet",
                         systemImage: "cart",
-                        description: Text("Capture a room and run redesign from Intent.")
+                        description: Text("Complete a RoomPlan LiDAR scan, then run redesign from Intent.")
                     )
                 }
             }

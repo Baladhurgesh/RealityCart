@@ -68,8 +68,8 @@ async def shopify_search(
 
 @app.post("/v1/redesign", response_model=RedesignResponse)
 async def redesign(
-    image: Annotated[UploadFile, File(description="Room or desk photo")],
-    intent_text: Annotated[str, Form()] = "Minimalist developer desk setup",
+    image: Annotated[UploadFile, File(description="Room or space capture")],
+    intent_text: Annotated[str, Form()] = "Minimalist room redesign",
     budget_usd: Annotated[float, Form()] = 600.0,
     room_plan_json: Annotated[str | None, Form()] = None,
     calibration_json: Annotated[str | None, Form()] = None,
@@ -116,7 +116,7 @@ async def scene_only(
     """Debug helper: run full pipeline (same as redesign)."""
     return await redesign(
         image=image,
-        intent_text=intent_text or "Analyze this workspace",
+        intent_text=intent_text or "Analyze this space",
         budget_usd=budget_usd,
         room_plan_json=room_plan_json,
         calibration_json=calibration_json,

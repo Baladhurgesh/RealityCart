@@ -74,13 +74,13 @@ async def run_redesign(
     if scene.model == "fallback":
         warnings.append("Scene parser fell back — check GEMINI_API_KEY / image quality.")
 
-    # Prefer user/RoomPlan dimensions; warn if approximate.
+    # Prefer RoomPlan dimensions; warn if approximate.
     if scene.surfaces and scene.surfaces[0].dimensions_source.value in {
         "approximate",
         "inferred",
     }:
         warnings.append(
-            "Surface dimensions are approximate. Enter desk width or run RoomPlan for scale."
+            "Surface dimensions are approximate. Re-run with RoomPlan LiDAR for real scale."
         )
 
     plan = await create_design_plan(

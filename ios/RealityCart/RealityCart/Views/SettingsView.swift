@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var session: RedesignSession
+    @FocusState private var urlFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -10,7 +11,14 @@ struct SettingsView: View {
                     TextField("API base URL", text: $session.apiBaseURL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .textContentType(.URL)
+                        .focused($urlFocused)
+                        .submitLabel(.done)
+                        .onSubmit { urlFocused = false }
+
                     Button("Check health") {
+                        urlFocused = false
                         Task { await session.checkHealth() }
                     }
                     if let health = session.health {
@@ -37,11 +45,12 @@ struct SettingsView: View {
 
                 Section("Demo tip") {
                     Text(
-                        "Say: “Make this a minimalist developer setup for $600. Keep my monitor, add a lamp and storage, all black.”"
+                        "Say: “Make this living room feel minimalist for $600. Keep my sofa, add a floor lamp and storage, mostly black.”"
                     )
                     .font(.footnote)
                 }
             }
+            .dismissKeyboardToolbar()
             .navigationTitle("Settings")
             .task {
                 await session.checkHealth()

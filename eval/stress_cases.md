@@ -6,7 +6,7 @@ Media is the core input. These cases are meant to be **real captures**, not scri
 | --- | --- | --- | --- | --- |
 | S1 | Cluttered desk, cables, coffee mug, dual monitors | Footprint of kept monitors, true free regions | Decision rejects lamp in crowded center → Carbon re-plans to side / wall shelf | pending |
 | S2 | Dim evening desk photo | Material/color of existing gear | Style gate fails “all black” on light wood organizers → retry darker query | pending |
-| S3 | Extreme phone angle (desk foreshortened) | True width/depth | Approximate scale wrong without RoomPlan → force user desk width | pending |
+| S3 | Extreme phone angle on a large room | True width/depth | Approximate scale wrong without RoomPlan → require LiDAR rescan | pending |
 | S4 | Voice intent over noisy room | Prosody/noise vs typed brief | Speech partial transcript → user edits before run | pending |
 | S5 | Budget $150 with lamp+storage+plant | Bundle constraint | Budget Decision fails; drop plant / cheaper lamp on re-plan | pending |
 | S6 | RoomPlan scan of office with sofa + desk | Real cm furniture boxes | Over-detect furniture as keep → Carbon keep list must honor monitor keep | pending |
@@ -41,7 +41,7 @@ Compared to a **single Carbon call** that invents product names without Catalog 
 
 ## Demo script
 
-1. Open Capture → photo or RoomPlan of a real desk; set width.
+1. Open Capture → RoomPlan scan of any real room/space.
 2. Intent (voice or text): *Make this a minimalist developer setup for $600. Keep my existing monitor, add a lamp and storage, and make everything black.*
 3. Show Plan tab: Hydrogen scene, Carbon slots, Shopify products, Decision reasons, budget meter.
 4. Show 3D tab: proxies on calibrated plane.

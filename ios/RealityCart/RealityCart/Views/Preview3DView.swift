@@ -22,15 +22,14 @@ struct Preview3DView: View {
                     PlacementRealityView(
                         placements: result.placements,
                         surfaceHeight: result.scene.surfaces?.first?.height_m ?? 0.74,
-                        surfaceWidth: result.scene.surfaces?.first?.width_m
-                            ?? session.deskWidthMeters
+                        surfaceWidth: result.scene.surfaces?.first?.width_m ?? 1.2
                     )
                     .id(result.placements.map(\.slot_id).joined())
                 } else {
                     ContentUnavailableView(
                         "3D preview",
                         systemImage: "cube",
-                        description: Text("Run a redesign to place category proxies on the calibrated plane.")
+                        description: Text("Run a redesign after a RoomPlan LiDAR scan to place proxies at real scale.")
                     )
                 }
             }

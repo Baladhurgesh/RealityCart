@@ -30,5 +30,6 @@ struct ContentView: View {
                 .tag(4)
         }
         .tint(Color(red: 0.12, green: 0.45, blue: 0.42))
+        .scrollDismissesKeyboard(.interactively)
     }
 }

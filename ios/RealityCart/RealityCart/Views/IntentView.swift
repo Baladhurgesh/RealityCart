@@ -12,7 +12,7 @@ struct IntentView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("What should we build?") {
+                Section("How should this space feel?") {
                     TextEditor(text: $session.intentText)
                         .frame(minHeight: 120)
                         .focused($focused)
@@ -56,6 +56,7 @@ struct IntentView: View {
 
                 Section {
                     Button {
+                        focused = false
                         onRun()
                     } label: {
                         if session.isLoading {
@@ -64,7 +65,7 @@ struct IntentView: View {
                             Label("Run redesign", systemImage: "sparkles")
                         }
                     }
-                    .disabled(session.capturedImage == nil || session.isLoading)
+                    .disabled(session.capturedImage == nil || session.roomPlanJSON == nil || session.isLoading)
                 }
 
                 Section("Status") {
@@ -74,6 +75,7 @@ struct IntentView: View {
                     }
                 }
             }
+            .dismissKeyboardToolbar()
             .navigationTitle("Intent")
         }
     }

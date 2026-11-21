@@ -1,4 +1,4 @@
-"""gemini-4-hydrogen: multimodal room/desk scene parser."""
+"""gemini-4-hydrogen: multimodal space/room scene parser."""
 
 from __future__ import annotations
 
@@ -26,38 +26,38 @@ logger = logging.getLogger(__name__)
 SCENE_SCHEMA_HINT = """
 Return ONLY valid JSON matching this shape:
 {
-  "scene_type": "home_office",
-  "style_cues": ["minimalist", "dark"],
+  "scene_type": "living_room",
+  "style_cues": ["minimalist", "warm"],
   "surfaces": [
     {
-      "id": "desk_surface",
+      "id": "primary_surface",
       "type": "horizontal_plane",
-      "label": "desk",
-      "width_m": 1.2,
-      "depth_m": 0.6,
-      "height_m": 0.74,
+      "label": "floor_or_table",
+      "width_m": 3.2,
+      "depth_m": 2.4,
+      "height_m": 0.0,
       "dimensions_source": "inferred",
       "confidence": 0.4
     }
   ],
   "objects": [
     {
-      "id": "monitor_1",
-      "type": "monitor",
-      "label": "computer monitor",
-      "location": "desk_center",
-      "surface_id": "desk_surface",
+      "id": "sofa_1",
+      "type": "sofa",
+      "label": "sofa",
+      "location": "against_wall",
+      "surface_id": "primary_surface",
       "keep": true,
       "notes": null
     }
   ],
   "available_positions": [
     {
-      "id": "slot_left",
-      "surface_id": "desk_surface",
+      "id": "slot_corner",
+      "surface_id": "primary_surface",
       "region": "left",
-      "description": "Clear area left of monitor",
-      "estimated_clearance_m": 0.25
+      "description": "Open floor area for a floor lamp or plant",
+      "estimated_clearance_m": 0.8
     }
   ],
   "clutter_level": "medium",
@@ -65,11 +65,33 @@ Return ONLY valid JSON matching this shape:
   "notes": "short note"
 }
 Rules:
-- Prefer RoomPlan / user measurements over guessing meters.
+- The space can be ANY indoor scene: living room, bedroom, kitchen, office, studio, hallway, etc.
+- Prefer RoomPlan LiDAR measurements over guessing meters.
 - If dimensions are unknown, set dimensions_source to "approximate" and lower confidence.
-- Identify empty regions suitable for lamps, organizers, plants, stands.
-- Mark existing monitors/laptops as keep=true unless clearly disposable clutter.
+- Identify empty regions suitable for furniture and decor that match the space type.
+- Mark major existing furniture the user would likely keep as keep=true unless clearly disposable clutter.
+- Use scene_type values like living_room, bedroom, kitchen, home_office, dining_room, studio, unknown.
 """
+
+# RoomPlan furniture categories that often define a usable primary plane.
+_PRIMARY_FURNITURE = {
+    "table",
+    "desk",
+    "diningtable",
+    "sofa",
+    "couch",
+    "bed",
+    "storage",
+    "chair",
+    "refrigerator",
+    "oven",
+    "stove",
+    "dishwasher",
+    "washer",
+    "dryer",
+    "television",
+    "fireplace",
+}
 
 
 def _merge_measurements(
@@ -81,7 +103,7 @@ def _merge_measurements(
     surfaces = list(scene.surfaces)
 
     if calibration and calibration.width_m:
-        sid = calibration.surface_id
+        sid = calibration.surface_id or "primary_surface"
         found = False
         for i, s in enumerate(surfaces):
             if s.id == sid or s.type == "horizontal_plane":
@@ -89,7 +111,7 @@ def _merge_measurements(
                     update={
                         "width_m": calibration.width_m,
                         "depth_m": calibration.depth_m or s.depth_m,
-                        "height_m": calibration.height_m or s.height_m or 0.74,
+                        "height_m": calibration.height_m if calibration.height_m is not None else s.height_m,
                         "dimensions_source": DimensionsSource.user_measurement,
                         "confidence": 0.95,
                     }
@@ -105,7 +127,7 @@ def _merge_measurements(
                     label="primary_surface",
                     width_m=calibration.width_m,
                     depth_m=calibration.depth_m,
-                    height_m=calibration.height_m or 0.74,
+                    height_m=calibration.height_m or 0.0,
                     dimensions_source=DimensionsSource.user_measurement,
                     confidence=0.95,
                 ),
@@ -129,8 +151,8 @@ def _merge_measurements(
                         notes="from_roomplan",
                     )
                 )
-            # Promote table/desk dimensions onto primary surface.
-            if category.lower() in {"table", "desk", "diningTable", "storage"}:
+            # Promote large RoomPlan objects onto the primary surface when useful.
+            if category.lower().replace(" ", "") in _PRIMARY_FURNITURE:
                 w = _m(dims.get("width") or dims.get("x"))
                 d = _m(dims.get("depth") or dims.get("z"))
                 h = _m(dims.get("height") or dims.get("y"))
@@ -139,11 +161,45 @@ def _merge_measurements(
                         update={
                             "width_m": w,
                             "depth_m": d or surfaces[0].depth_m,
-                            "height_m": h or surfaces[0].height_m,
+                            "height_m": h if h is not None else surfaces[0].height_m,
                             "dimensions_source": DimensionsSource.roomplan,
                             "confidence": 0.9,
+                            "label": surfaces[0].label or category.lower(),
                         }
                     )
+
+    # Floor footprint from RoomPlan walls if we still lack a surface.
+    if room_plan and room_plan.walls and (not surfaces or surfaces[0].width_m is None):
+        widths = []
+        for wall in room_plan.walls:
+            dims = wall.get("dimensions") or {}
+            w = _m(dims.get("width") or dims.get("x"))
+            if w:
+                widths.append(w)
+        if widths:
+            approx = max(widths)
+            if not surfaces:
+                surfaces = [
+                    Surface(
+                        id="primary_surface",
+                        type="horizontal_plane",
+                        label="floor",
+                        width_m=approx,
+                        depth_m=approx * 0.75,
+                        height_m=0.0,
+                        dimensions_source=DimensionsSource.roomplan,
+                        confidence=0.7,
+                    )
+                ]
+            else:
+                surfaces[0] = surfaces[0].model_copy(
+                    update={
+                        "width_m": approx,
+                        "depth_m": surfaces[0].depth_m or approx * 0.75,
+                        "dimensions_source": DimensionsSource.roomplan,
+                        "confidence": 0.7,
+                    }
+                )
 
     scene.surfaces = surfaces
     if not scene.available_positions and surfaces:
@@ -152,13 +208,13 @@ def _merge_measurements(
                 id="slot_left",
                 surface_id=surfaces[0].id,
                 region="left",
-                description="Left side of primary surface",
+                description="Open area on the left of the primary space",
             ),
             AvailablePosition(
                 id="slot_right",
                 surface_id=surfaces[0].id,
                 region="right",
-                description="Right side of primary surface",
+                description="Open area on the right of the primary space",
             ),
         ]
     return scene
@@ -179,16 +235,16 @@ def _fallback_scene(
 ) -> SceneAnalysis:
     width = calibration.width_m if calibration else None
     scene = SceneAnalysis(
-        scene_type="home_office",
+        scene_type="unknown",
         style_cues=["unknown"],
         surfaces=[
             Surface(
-                id="desk_surface",
+                id="primary_surface",
                 type="horizontal_plane",
-                label="desk",
-                width_m=width or 1.2,
-                depth_m=(calibration.depth_m if calibration else 0.6),
-                height_m=(calibration.height_m if calibration else 0.74),
+                label="primary_space",
+                width_m=width or 3.0,
+                depth_m=(calibration.depth_m if calibration else 2.5),
+                height_m=(calibration.height_m if calibration else 0.0),
                 dimensions_source=(
                     DimensionsSource.user_measurement
                     if width
@@ -201,15 +257,15 @@ def _fallback_scene(
         available_positions=[
             AvailablePosition(
                 id="slot_left",
-                surface_id="desk_surface",
+                surface_id="primary_surface",
                 region="left",
-                description="Left clearance",
+                description="Left open area",
             ),
             AvailablePosition(
                 id="slot_right",
-                surface_id="desk_surface",
+                surface_id="primary_surface",
                 region="right",
-                description="Right clearance",
+                description="Right open area",
             ),
         ],
         notes="Fallback scene — Gemini unavailable or parse failed",
@@ -234,7 +290,8 @@ async def analyze_scene(
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
             types.Part.from_text(
                 text=(
-                    "Analyze this room/desk photo for a furniture shopping redesign.\n"
+                    "Analyze this indoor space (any room or area) for a furniture/decor "
+                    "shopping redesign. Do not assume it is a desk.\n"
                     f"{SCENE_SCHEMA_HINT}\n"
                 )
             ),
