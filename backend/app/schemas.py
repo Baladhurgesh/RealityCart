@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DimensionsSource(str, Enum):
@@ -13,6 +13,20 @@ class DimensionsSource(str, Enum):
     user_measurement = "user_measurement"
     inferred = "inferred"
     approximate = "approximate"
+
+
+_DIMENSION_ALIASES = {
+    "roomplan": DimensionsSource.roomplan,
+    "roomplan_lidar": DimensionsSource.roomplan,
+    "lidar": DimensionsSource.roomplan,
+    "user_measurement": DimensionsSource.user_measurement,
+    "user_calibration": DimensionsSource.user_measurement,
+    "calibration": DimensionsSource.user_measurement,
+    "inferred": DimensionsSource.inferred,
+    "approximate": DimensionsSource.approximate,
+    "estimate": DimensionsSource.approximate,
+    "guess": DimensionsSource.approximate,
+}
 
 
 class Surface(BaseModel):
@@ -24,6 +38,16 @@ class Surface(BaseModel):
     height_m: float | None = None
     dimensions_source: DimensionsSource = DimensionsSource.approximate
     confidence: float | None = None
+
+    @field_validator("dimensions_source", mode="before")
+    @classmethod
+    def normalize_dimensions_source(cls, value: Any) -> Any:
+        if isinstance(value, DimensionsSource):
+            return value
+        if isinstance(value, str):
+            key = value.strip().lower().replace(" ", "_").replace("-", "_")
+            return _DIMENSION_ALIASES.get(key, DimensionsSource.approximate)
+        return DimensionsSource.approximate
 
 
 class SceneObject(BaseModel):

@@ -313,17 +313,28 @@ async def analyze_scene(
         if intent_hint:
             parts.append(types.Part.from_text(text=f"User intent hint: {intent_hint}"))
 
+        logger.info("Hydrogen scene parse starting…")
         response = client.models.generate_content(
             model=settings.scene_model,
             contents=parts,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 temperature=0.2,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True
+                ),
+                thinking_config=types.ThinkingConfig(thinking_level="low"),
             ),
         )
         text = response.text or "{}"
         data = json.loads(text)
         scene = SceneAnalysis.model_validate(data)
+        logger.info(
+            "Hydrogen scene ok: type=%s surfaces=%d objects=%d",
+            scene.scene_type,
+            len(scene.surfaces),
+            len(scene.objects),
+        )
         scene.model = settings.scene_model
         return _merge_measurements(scene, calibration, room_plan)
     except (ValidationError, json.JSONDecodeError, Exception) as exc:

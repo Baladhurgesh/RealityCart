@@ -11,6 +11,7 @@ final class RedesignSession: ObservableObject {
 
     @Published var capturedImage: UIImage?
     @Published var roomPlanJSON: Data?
+    @Published var roomPlanUSDZURL: URL?
     @Published var intentText: String =
         "Make this space feel minimalist for $600. Keep the main furniture I already have, add lighting and storage, and keep the palette mostly black."
     @Published var budgetUSD: Double {

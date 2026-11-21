@@ -6,11 +6,15 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            CaptureView(onContinue: { tab = 1 })
-                .tabItem { Label("Capture", systemImage: "camera.viewfinder") }
-                .tag(0)
+            CaptureView(onContinue: {
+                Keyboard.dismiss()
+                tab = 1
+            })
+            .tabItem { Label("Capture", systemImage: "camera.viewfinder") }
+            .tag(0)
 
             IntentView(onRun: {
+                Keyboard.dismiss()
                 tab = 2
                 Task { await session.runRedesign() }
             })
@@ -30,6 +34,9 @@ struct ContentView: View {
                 .tag(4)
         }
         .tint(Color(red: 0.12, green: 0.45, blue: 0.42))
-        .scrollDismissesKeyboard(.interactively)
+        .dismissKeyboardOnAllTabs()
+        .onChange(of: tab) { _, _ in
+            Keyboard.dismiss()
+        }
     }
 }

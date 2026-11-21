@@ -18,6 +18,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.realitycart.app
         INFOPLIST_FILE: RealityCart/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         DEVELOPMENT_TEAM: G8F9227PUA
         CODE_SIGN_STYLE: Automatic
         CURRENT_PROJECT_VERSION: 1
@@ -27,5 +28,7 @@ targets:
       - sdk: RoomPlan.framework
       - sdk: RealityKit.framework
       - sdk: ARKit.framework
+      - sdk: SceneKit.framework
+      - sdk: QuickLook.framework
       - sdk: Speech.framework
       - sdk: AVFoundation.framework

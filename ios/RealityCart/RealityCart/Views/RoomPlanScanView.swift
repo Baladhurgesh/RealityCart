@@ -11,8 +11,14 @@ enum RoomPlanCoordinator {
     }
 }
 
+struct RoomPlanScanResult {
+    var image: UIImage?
+    var json: Data
+    var usdzURL: URL?
+}
+
 struct RoomPlanScanView: View {
-    var onComplete: (UIImage?, Data) -> Void
+    var onComplete: (RoomPlanScanResult) -> Void
     var onCancel: () -> Void
 
     var body: some View {
@@ -31,7 +37,7 @@ struct RoomPlanScanView: View {
 
 @available(iOS 16.0, *)
 struct RoomPlanRepresentable: UIViewControllerRepresentable {
-    var onComplete: (UIImage?, Data) -> Void
+    var onComplete: (RoomPlanScanResult) -> Void
     var onCancel: () -> Void
 
     func makeUIViewController(context: Context) -> RoomPlanViewController {
@@ -46,13 +52,14 @@ struct RoomPlanRepresentable: UIViewControllerRepresentable {
 
 @available(iOS 16.0, *)
 final class RoomPlanViewController: UIViewController, RoomCaptureViewDelegate {
-    var onComplete: ((UIImage?, Data) -> Void)?
+    var onComplete: ((RoomPlanScanResult) -> Void)?
     var onCancel: (() -> Void)?
 
     private var roomCaptureView: RoomCaptureView!
     private var captureSessionConfig = RoomCaptureSession.Configuration()
     private var finalRoom: CapturedRoom?
     private var isScanning = false
+    private var reviewContainer: UIView?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -68,13 +75,16 @@ final class RoomPlanViewController: UIViewController, RoomCaptureViewDelegate {
         controls.axis = .horizontal
         controls.spacing = 12
         controls.translatesAutoresizingMaskIntoConstraints = false
+        controls.tag = 100
 
         let cancel = UIButton(type: .system)
         cancel.setTitle("Cancel", for: .normal)
+        cancel.tintColor = .white
         cancel.addTarget(self, action: #selector(cancelTapped), for: .touchUpInside)
 
         let done = UIButton(type: .system)
         done.setTitle("Finish Scan", for: .normal)
+        done.tintColor = .white
         done.addTarget(self, action: #selector(doneTapped), for: .touchUpInside)
 
         controls.addArrangedSubview(cancel)
@@ -90,7 +100,9 @@ final class RoomPlanViewController: UIViewController, RoomCaptureViewDelegate {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        startSession()
+        if reviewContainer == nil {
+            startSession()
+        }
     }
 
     private func startSession() {
@@ -114,13 +126,102 @@ final class RoomPlanViewController: UIViewController, RoomCaptureViewDelegate {
 
     func captureView(didPresent processedResult: CapturedRoom, error: Error?) {
         finalRoom = processedResult
-        exportAndFinish(processedResult)
+        presentReview(for: processedResult)
     }
 
-    private func exportAndFinish(_ room: CapturedRoom) {
+    private func presentReview(for room: CapturedRoom) {
+        view.viewWithTag(100)?.isHidden = true
+
+        let exported = exportRoom(room)
+        let container = UIView(frame: view.bounds)
+        container.backgroundColor = UIColor.systemBackground
+        container.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        reviewContainer = container
+        view.addSubview(container)
+
+        let title = UILabel()
+        title.text = "RoomPlan scan ready"
+        title.font = .boldSystemFont(ofSize: 22)
+        title.translatesAutoresizingMaskIntoConstraints = false
+
+        let subtitle = UILabel()
+        subtitle.text = "Inspect the scanned room, then use it for redesign."
+        subtitle.font = .systemFont(ofSize: 14)
+        subtitle.textColor = .secondaryLabel
+        subtitle.numberOfLines = 0
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
+
+        let host = UIHostingController(
+            rootView: RoomPlanViewerView(
+                usdzURL: exported.usdzURL,
+                roomPlanJSON: exported.json,
+                onDone: nil,
+                showsChrome: false
+            )
+        )
+        addChild(host)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(host.view)
+        host.didMove(toParent: self)
+
+        let useButton = UIButton(type: .system)
+        useButton.setTitle("Use this scan", for: .normal)
+        useButton.titleLabel?.font = .boldSystemFont(ofSize: 17)
+        useButton.backgroundColor = UIColor(red: 0.12, green: 0.45, blue: 0.42, alpha: 1)
+        useButton.setTitleColor(.white, for: .normal)
+        useButton.layer.cornerRadius = 12
+        useButton.translatesAutoresizingMaskIntoConstraints = false
+        useButton.addAction(UIAction { [weak self] _ in
+            self?.onComplete?(exported)
+        }, for: .touchUpInside)
+
+        let rescanButton = UIButton(type: .system)
+        rescanButton.setTitle("Rescan", for: .normal)
+        rescanButton.translatesAutoresizingMaskIntoConstraints = false
+        rescanButton.addAction(UIAction { [weak self] _ in
+            self?.reviewContainer?.removeFromSuperview()
+            self?.reviewContainer = nil
+            self?.view.viewWithTag(100)?.isHidden = false
+            host.willMove(toParent: nil)
+            host.view.removeFromSuperview()
+            host.removeFromParent()
+            self?.startSession()
+        }, for: .touchUpInside)
+
+        container.addSubview(title)
+        container.addSubview(subtitle)
+        container.addSubview(useButton)
+        container.addSubview(rescanButton)
+
+        NSLayoutConstraint.activate([
+            title.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: 12),
+            title.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            title.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4),
+            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            subtitle.trailingAnchor.constraint(equalTo: title.trailingAnchor),
+
+            host.view.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 12),
+            host.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            host.view.bottomAnchor.constraint(equalTo: useButton.topAnchor, constant: -12),
+
+            useButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            useButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            useButton.heightAnchor.constraint(equalToConstant: 50),
+            useButton.bottomAnchor.constraint(equalTo: rescanButton.topAnchor, constant: -8),
+
+            rescanButton.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            rescanButton.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.bottomAnchor, constant: -8),
+        ])
+    }
+
+    private func exportRoom(_ room: CapturedRoom) -> RoomPlanScanResult {
         var objects: [[String: Any]] = []
         for obj in room.objects {
             let dims = obj.dimensions
+            let t = obj.transform
             objects.append([
                 "id": obj.identifier.uuidString,
                 "category": String(describing: obj.category),
@@ -129,6 +230,11 @@ final class RoomPlanViewController: UIViewController, RoomCaptureViewDelegate {
                     "height": Double(dims.y),
                     "depth": Double(dims.z),
                 ],
+                "transform": [
+                    "tx": Double(t.columns.3.x),
+                    "ty": Double(t.columns.3.y),
+                    "tz": Double(t.columns.3.z),
+                ],
                 "confidence": String(describing: obj.confidence),
             ])
         }
@@ -136,6 +242,7 @@ final class RoomPlanViewController: UIViewController, RoomCaptureViewDelegate {
         var walls: [[String: Any]] = []
         for surface in room.walls {
             let dims = surface.dimensions
+            let t = surface.transform
             walls.append([
                 "id": surface.identifier.uuidString,
                 "category": "wall",
@@ -143,6 +250,11 @@ final class RoomPlanViewController: UIViewController, RoomCaptureViewDelegate {
                     "width": Double(dims.x),
                     "height": Double(dims.y),
                     "depth": Double(dims.z),
+                ],
+                "transform": [
+                    "tx": Double(t.columns.3.x),
+                    "ty": Double(t.columns.3.y),
+                    "tz": Double(t.columns.3.z),
                 ],
             ])
         }
@@ -153,17 +265,25 @@ final class RoomPlanViewController: UIViewController, RoomCaptureViewDelegate {
             "floors": [],
         ]
 
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) else {
-            onCancel?()
-            return
+        let json = (try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]))
+            ?? Data("{}".utf8)
+
+        var usdzURL: URL?
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RealityCart-\(UUID().uuidString).usdz")
+        do {
+            try room.export(to: url)
+            usdzURL = url
+        } catch {
+            print("RoomPlan USDZ export failed: \(error)")
         }
 
-        // Snapshot from the capture view hierarchy as a stand-in keyframe.
         let renderer = UIGraphicsImageRenderer(bounds: roomCaptureView.bounds)
         let image = renderer.image { ctx in
             roomCaptureView.layer.render(in: ctx.cgContext)
         }
-        onComplete?(image, data)
+
+        return RoomPlanScanResult(image: image, json: json, usdzURL: usdzURL)
     }
 }
 

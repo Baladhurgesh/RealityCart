@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from app.decisions import evaluate_candidate
 from app.gemini_plan import create_design_plan, replan_after_failures
@@ -30,7 +31,7 @@ REGION_OFFSETS = {
 def _surface_height(scene) -> float:
     if scene.surfaces and scene.surfaces[0].height_m:
         return float(scene.surfaces[0].height_m)
-    return 0.74
+    return 0.0
 
 
 def _placement_position(region: str, height_m: float) -> dict[str, float]:
@@ -47,14 +48,16 @@ async def run_redesign(
     budget_usd: float,
     room_plan: RoomPlanPayload | None = None,
     calibration: SurfaceCalibration | None = None,
-    max_retries: int = 1,
+    max_retries: int = 0,
 ) -> RedesignResponse:
     steps: list[PipelineStep] = []
     warnings: list[str] = []
+    t0 = time.perf_counter()
 
     if not image_bytes:
         raise ValueError("An image capture is required (Element 119 — media-central).")
 
+    t = time.perf_counter()
     scene = await analyze_scene(
         image_bytes,
         mime_type=mime_type,
@@ -62,6 +65,7 @@ async def run_redesign(
         calibration=calibration,
         intent_hint=intent_text,
     )
+    logger.info("step scene_parse %.1fs", time.perf_counter() - t)
     steps.append(
         PipelineStep(
             name="scene_parse",
@@ -74,7 +78,6 @@ async def run_redesign(
     if scene.model == "fallback":
         warnings.append("Scene parser fell back — check GEMINI_API_KEY / image quality.")
 
-    # Prefer RoomPlan dimensions; warn if approximate.
     if scene.surfaces and scene.surfaces[0].dimensions_source.value in {
         "approximate",
         "inferred",
@@ -83,9 +86,11 @@ async def run_redesign(
             "Surface dimensions are approximate. Re-run with RoomPlan LiDAR for real scale."
         )
 
+    t = time.perf_counter()
     plan = await create_design_plan(
         scene, intent_text=intent_text, budget_usd=budget_usd
     )
+    logger.info("step design_plan %.1fs (%d slots)", time.perf_counter() - t, len(plan.slots))
     steps.append(
         PipelineStep(
             name="design_plan",
@@ -109,11 +114,12 @@ async def run_redesign(
             query = slot.search_query
             if slot.preferred_color and slot.preferred_color.lower() not in query.lower():
                 query = f"{slot.preferred_color} {query}"
+            t_slot = time.perf_counter()
             try:
                 candidates = await search_catalog(
                     query,
                     max_price_usd=slot.max_price_usd or remaining,
-                    limit=5,
+                    limit=3,
                 )
             except Exception as exc:
                 logger.exception("Shopify search failed for %s", slot.id)
@@ -129,7 +135,8 @@ async def run_redesign(
             rejected = []
             chosen = None
             chosen_decision = None
-            for candidate in candidates:
+            # Evaluate at most 2 candidates per slot for latency.
+            for candidate in candidates[:2]:
                 decision = await evaluate_candidate(
                     scene,
                     slot,
@@ -146,6 +153,14 @@ async def run_redesign(
                 failures.append(
                     f"{slot.id}: rejected '{candidate.title}' ({decision.reason})"
                 )
+
+            logger.info(
+                "slot %s shopify+decisions %.1fs candidates=%d accepted=%s",
+                slot.id,
+                time.perf_counter() - t_slot,
+                len(candidates),
+                bool(chosen),
+            )
 
             if not chosen or not chosen_decision:
                 continue
@@ -166,7 +181,9 @@ async def run_redesign(
             )
         return filled
 
+    t = time.perf_counter()
     placements = await fill_slots(plan)
+    logger.info("step shopify+decisions %.1fs", time.perf_counter() - t)
     steps.append(
         PipelineStep(
             name="shopify_search",
@@ -184,8 +201,9 @@ async def run_redesign(
         )
     )
 
-    if len(placements) < max(1, len(plan.slots) // 2) and max_retries > 0:
-        warnings.append("Too few accepted products — asking Carbon to re-plan.")
+    if len(placements) == 0 and max_retries > 0:
+        warnings.append("No accepted products — asking Carbon to re-plan.")
+        t = time.perf_counter()
         plan = await replan_after_failures(
             scene,
             plan,
@@ -194,6 +212,7 @@ async def run_redesign(
             budget_usd=budget_usd,
         )
         placements = await fill_slots(plan)
+        logger.info("step replan %.1fs", time.perf_counter() - t)
         steps.append(
             PipelineStep(
                 name="replan",
@@ -204,6 +223,7 @@ async def run_redesign(
         )
 
     total = sum(p.product.price_usd or 0.0 for p in placements)
+    logger.info("redesign total %.1fs", time.perf_counter() - t0)
     return RedesignResponse(
         scene=scene,
         plan=plan,

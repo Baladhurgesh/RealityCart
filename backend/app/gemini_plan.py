@@ -160,12 +160,17 @@ async def create_design_plan(
 
     try:
         client = get_genai_client()
+        logger.info("Carbon design plan starting…")
         response = client.models.generate_content(
             model=settings.plan_model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
-                temperature=0.4,
+                temperature=0.3,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True
+                ),
+                thinking_config=types.ThinkingConfig(thinking_level="low"),
             ),
         )
         data = json.loads(response.text or "{}")
@@ -174,6 +179,10 @@ async def create_design_plan(
         plan.model = settings.plan_model
         if not plan.slots:
             raise ValueError("Empty slots")
+        # Cap slots for latency (Shopify + Decisions per slot).
+        if len(plan.slots) > 3:
+            plan.slots = plan.slots[:3]
+        logger.info("Carbon plan ok: %d slots — %s", len(plan.slots), plan.summary[:80])
         return _normalize_proxies(plan)
     except (ValidationError, json.JSONDecodeError, Exception) as exc:
         logger.exception("Carbon plan failed: %s", exc)
@@ -206,7 +215,11 @@ async def replan_after_failures(
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
-                temperature=0.5,
+                temperature=0.4,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True
+                ),
+                thinking_config=types.ThinkingConfig(thinking_level="low"),
             ),
         )
         data = json.loads(response.text or "{}")
