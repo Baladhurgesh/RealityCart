@@ -247,17 +247,36 @@ def _image_urls(product: dict[str, Any]) -> list[str]:
     return urls
 
 
-def _has_3d(product: dict[str, Any]) -> bool:
+_MODEL_TYPES = {"model", "3d", "model3d", "model_3d"}
+
+
+def _model_asset(product: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Return (url, format) for the first merchant 3D model. Prefer USDZ over GLB."""
+    found: tuple[str, str] | None = None
     for item in product.get("media") or []:
         if not isinstance(item, dict):
             continue
+        url = item.get("url") or ""
+        if not isinstance(url, str) or not url.startswith("http"):
+            continue
+        path = url.lower().split("?")[0]
         mime = (item.get("mime_type") or item.get("content_type") or "").lower()
-        url = (item.get("url") or "").lower().split("?")[0]
-        if "model" in mime or url.endswith((".glb", ".usdz")):
-            return True
-        if (item.get("type") or "").lower() in ("model", "3d", "model3d", "model_3d"):
-            return True
-    return False
+        kind = (item.get("type") or "").lower()
+        is_model = kind in _MODEL_TYPES or "model" in mime or path.endswith(
+            (".usdz", ".glb", ".gltf", ".reality")
+        )
+        if not is_model:
+            continue
+        if path.endswith((".usdz", ".reality")) or "usd" in mime:
+            return url, "usdz"
+        if found is None:
+            found = (url, "glb" if path.endswith((".glb", ".gltf")) or "gltf" in mime else "model")
+    return found if found else (None, None)
+
+
+def _has_3d(product: dict[str, Any]) -> bool:
+    url, _ = _model_asset(product)
+    return url is not None
 
 
 def clean_description(raw: Any) -> str | None:
@@ -272,19 +291,116 @@ def clean_description(raw: Any) -> str | None:
     return text.strip()[:2000] or None
 
 
-_DIM_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(?:\"|''|in(?:ch(?:es)?)?|cm|mm)?\s*[x×]\s*"
-    r"(\d+(?:\.\d+)?)\s*(?:\"|''|in(?:ch(?:es)?)?|cm|mm)?"
-    r"(?:\s*[x×]\s*(\d+(?:\.\d+)?))?\s*(\"|''|in(?:ch(?:es)?)?|cm|mm)",
+_UNIT = r"(?:in(?:ch(?:es)?)?|cm|mm|ft|m|\"|''|')"
+_NUM = r"(\d+(?:\.\d+)?)"
+# "62.99 in W" or 31.5"W
+_LABELED_RE = re.compile(
+    rf"{_NUM}\s*({_UNIT})\s*([WwDdHhLl])\b",
     re.IGNORECASE,
 )
+_TRIPLE_RE = re.compile(
+    rf"{_NUM}\s*({_UNIT})?\s*[x×]\s*{_NUM}\s*({_UNIT})?\s*[x×]\s*{_NUM}\s*({_UNIT})",
+    re.IGNORECASE,
+)
+_PAIR_RE = re.compile(
+    rf"{_NUM}\s*({_UNIT})?\s*[x×]\s*{_NUM}\s*({_UNIT})",
+    re.IGNORECASE,
+)
+_SINGLE_RE = re.compile(
+    rf"{_NUM}\s*({_UNIT})(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _unit_to_m(value: float, unit: str | None, *, fallback: str | None = None) -> float | None:
+    raw = (unit or fallback or "").lower().strip()
+    if raw in {'"', "''", "in", "inch", "inches"}:
+        meters = value * 0.0254
+    elif raw == "cm":
+        meters = value * 0.01
+    elif raw == "mm":
+        meters = value * 0.001
+    elif raw in {"ft", "feet", "foot", "'"}:
+        meters = value * 0.3048
+    elif raw == "m":
+        meters = value
+    elif value > 3:
+        meters = value * 0.0254  # bare furniture numbers are almost always inches
+    else:
+        meters = value
+    if meters < 0.015 or meters > 4.5:
+        return None
+    return round(meters, 3)
+
+
+def parse_dimensions_m(
+    title: str,
+    description: str | None,
+) -> tuple[float | None, float | None, float | None, str | None]:
+    """Pull width, depth, height in meters from a listing title + description.
+
+    Prefers labeled axes (62.99 in W x 14.96 in D x 23.62 in H), then a
+    W x D x H triple, then a pair, then one overall dimension (lamp height
+    or furniture width).
+    """
+    text = f"{title}\n{description or ''}"
+    axes: dict[str, float] = {}
+    for match in _LABELED_RE.finditer(text):
+        meters = _unit_to_m(float(match.group(1)), match.group(2))
+        if meters is None:
+            continue
+        letter = match.group(3).upper()
+        key = {"W": "w", "D": "d", "H": "h", "L": "l"}[letter]
+        axes.setdefault(key, meters)
+    if "l" in axes and "w" not in axes:
+        axes["w"] = axes["l"]
+    elif "l" in axes and "d" not in axes:
+        axes["d"] = axes["w"]
+        axes["w"] = axes["l"]
+    if sum(k in axes for k in ("w", "d", "h")) >= 2:
+        hint = " × ".join(
+            f"{axes[k]:.2f} m {k.upper()}" for k in ("w", "d", "h") if k in axes
+        )
+        return axes.get("w"), axes.get("d"), axes.get("h"), hint
+
+    triple = _TRIPLE_RE.search(text)
+    if triple:
+        units = [triple.group(i) for i in (2, 4, 6)]
+        fallback = next((u for u in units if u), None)
+        dims = []
+        for num, unit in ((triple.group(1), triple.group(2)), (triple.group(3), triple.group(4)), (triple.group(5), triple.group(6))):
+            dims.append(_unit_to_m(float(num), unit, fallback=fallback))
+        if all(dims):
+            hint = triple.group(0).strip()
+            return dims[0], dims[1], dims[2], hint
+
+    pair = _PAIR_RE.search(text)
+    if pair:
+        fallback = pair.group(4) or pair.group(2)
+        w = _unit_to_m(float(pair.group(1)), pair.group(2), fallback=fallback)
+        d = _unit_to_m(float(pair.group(3)), pair.group(4), fallback=fallback)
+        if w and d:
+            return w, d, None, pair.group(0).strip()
+
+    singles = []
+    for match in _SINGLE_RE.finditer(title):
+        meters = _unit_to_m(float(match.group(1)), match.group(2))
+        if meters:
+            singles.append(meters)
+    if singles:
+        overall = max(singles)
+        blob = title.lower()
+        if any(word in blob for word in ("lamp", "light", "sconce")):
+            return None, None, overall, f"{overall:.2f} m H"
+        return overall, None, None, f"{overall:.2f} m W"
+    return None, None, None, None
 
 
 def _dimensions_hint(product: dict[str, Any], description: str | None) -> str | None:
     if product.get("dimensions"):
         return str(product["dimensions"])
-    m = _DIM_RE.search(description or "")
-    return m.group(0).strip() if m else None
+    _, _, _, hint = parse_dimensions_m(str(product.get("title") or ""), description)
+    return hint
 
 
 def _variant(v: dict[str, Any]) -> ProductVariant:
@@ -307,7 +423,10 @@ def normalize_product(product: dict[str, Any]) -> ProductOffer:
     price_max = _money_to_float(pr.get("max")) or price_min
     rating = product.get("rating") or {}
     images = _image_urls(product)
+    model_url, model_format = _model_asset(product)
     description = clean_description(product.get("description"))
+    title = str(product.get("title") or "Untitled")
+    width_m, depth_m, height_m, parsed_hint = parse_dimensions_m(title, description)
     available = None
     if variants:
         flags = [(v.get("availability") or {}).get("available") for v in variants]
@@ -315,7 +434,7 @@ def normalize_product(product: dict[str, Any]) -> ProductOffer:
 
     return ProductOffer(
         id=str(product.get("id") or "unknown"),
-        title=str(product.get("title") or "Untitled"),
+        title=title,
         description=description,
         price_usd=price_min,
         price_max_usd=price_max,
@@ -325,11 +444,17 @@ def normalize_product(product: dict[str, Any]) -> ProductOffer:
         product_url=v0.get("url") or v0.get("checkout_url") or seller.get("url"),
         vendor=seller.get("name"),
         seller_domain=seller.get("domain"),
+        variant_id=str(v0["id"]) if v0.get("id") else None,
         rating=rating.get("value"),
         review_count=rating.get("count"),
         available=available,
-        has_3d=_has_3d(product),
-        dimensions_hint=_dimensions_hint(product, description),
+        has_3d=model_url is not None,
+        model_url=model_url,
+        model_format=model_format,
+        dimensions_hint=parsed_hint or _dimensions_hint(product, description),
+        width_m=width_m,
+        depth_m=depth_m,
+        height_m=height_m,
         variants=[_variant(v) for v in variants[:25]],
         raw=product,
     )
@@ -384,6 +509,88 @@ async def search_catalog_page(
 async def search_catalog(query: str, **kwargs: Any) -> list[ProductOffer]:
     """Convenience wrapper used by the pipeline — products only."""
     return (await search_catalog_page(query, **kwargs)).products
+
+
+def _minor_display(amount: Any, currency: str) -> str:
+    digits = 0 if (currency or "").upper() in ZERO_DECIMAL else 2
+    try:
+        value = float(amount) / 10**digits
+    except (TypeError, ValueError):
+        return str(amount)
+    if (currency or "").upper() == "USD":
+        return f"${value:.{digits}f}"
+    return f"{currency} {value:.{digits}f}"
+
+
+def _link_label(kind: str) -> str:
+    return {
+        "refund_policy": "Refund policy",
+        "terms_of_service": "Terms of service",
+        "privacy_policy": "Privacy policy",
+    }.get(kind, kind.replace("_", " ").title())
+
+
+async def create_shop_checkout(
+    *,
+    shop: str,
+    variant_id: str,
+    quantity: int = 1,
+    country: str | None = None,
+) -> dict[str, Any]:
+    """Open a Shop MCP checkout. Does not place or pay for the order."""
+    settings = get_settings()
+    data, _ = await call_tool(
+        "create_checkout",
+        {
+            "shop": shop,
+            "checkout": {
+                "line_items": [
+                    {"item": {"id": variant_id}, "quantity": max(1, quantity)}
+                ],
+                "context": {"address_country": country or settings.shopify_country},
+            },
+        },
+        transport="shop",
+    )
+    currency = data.get("currency") or "USD"
+    totals = []
+    for entry in data.get("totals") or []:
+        if not isinstance(entry, dict):
+            continue
+        kind = str(entry.get("type") or "total")
+        totals.append(
+            {
+                "type": kind,
+                "label": str(entry.get("display_text") or kind.replace("_", " ").title()),
+                "amount_display": _minor_display(entry.get("amount"), currency),
+            }
+        )
+    messages = []
+    for message in data.get("messages") or []:
+        if isinstance(message, dict) and message.get("content"):
+            messages.append(str(message["content"]))
+        elif isinstance(message, str):
+            messages.append(message)
+    links = []
+    for link in data.get("links") or []:
+        if isinstance(link, dict) and link.get("url"):
+            links.append(
+                {
+                    "type": _link_label(str(link.get("type") or "link")),
+                    "url": link["url"],
+                }
+            )
+    logger.info("checkout created status=%s shop=%s", data.get("status"), shop)
+    return {
+        "id": str(data.get("id") or ""),
+        "status": str(data.get("status") or "incomplete"),
+        "currency": currency,
+        "shop": shop,
+        "continue_url": data.get("continue_url"),
+        "totals": totals,
+        "messages": messages,
+        "links": links,
+    }
 
 
 async def get_product(

@@ -26,6 +26,11 @@ final class RedesignSession: ObservableObject {
     @Published var result: RedesignResponseDTO?
     @Published var errorMessage: String?
     @Published var health: HealthResponse?
+    /// Product id → local-server USDZ URL, filled when Meshy finishes.
+    @Published var generatedModels: [String: String] = [:]
+    /// Product id → "generating" | "ready" | "failed"
+    @Published var modelStatus: [String: String] = [:]
+    private var generationTask: Task<Void, Never>?
 
     init() {
         let defaults = UserDefaults.standard
@@ -63,6 +68,9 @@ final class RedesignSession: ObservableObject {
 
         isLoading = true
         statusMessage = "Hydrogen scene → Carbon plan → Shopify → Decisions…"
+        generatedModels = [:]
+        modelStatus = [:]
+        generationTask?.cancel()
         defer { isLoading = false }
 
         do {
@@ -75,9 +83,61 @@ final class RedesignSession: ObservableObject {
             )
             result = response
             statusMessage = "Done — $\(String(format: "%.0f", response.total_usd)) of $\(String(format: "%.0f", response.plan.budget_usd))"
+            generateMissingModels()
         } catch {
             errorMessage = error.localizedDescription
             statusMessage = "Redesign failed"
+        }
+    }
+
+    func startCheckout(shop: String, variantID: String) async throws -> CheckoutSessionDTO {
+        try await client.startCheckout(shop: shop, variantID: variantID)
+    }
+
+    /// Ask the backend for a Meshy USDZ for every placement that has photos but no merchant model.
+    func generateMissingModels() {
+        guard let placements = result?.placements else { return }
+        generationTask?.cancel()
+        let snapshots = placements.map { placement in
+            (
+                placement.product.id,
+                placement.product.usdzURL != nil,
+                (placement.product.image_urls ?? []) + (placement.product.image_url.map { [$0] } ?? [])
+            )
+        }
+        generationTask = Task {
+            await withTaskGroup(of: Void.self) { group in
+                for (productID, hasMerchantModel, images) in snapshots {
+                    if hasMerchantModel || images.isEmpty { continue }
+                    if generatedModels[productID] != nil { continue }
+                    group.addTask { await self.generateOne(productID: productID, imageURLs: images) }
+                }
+            }
+        }
+    }
+
+    private func generateOne(productID: String, imageURLs: [String]) async {
+        let key = ModelKey.make(productID)
+        modelStatus[productID] = "generating"
+        do {
+            _ = try await client.startGeneratedModel(productID: productID, imageURLs: imageURLs)
+            while !Task.isCancelled {
+                let job = try await client.generatedModelStatus(key: key)
+                if job.status == "ready" {
+                    generatedModels[productID] = client.generatedModelFileURL(key: key).absoluteString
+                    modelStatus[productID] = "ready"
+                    return
+                }
+                if job.status == "failed" {
+                    modelStatus[productID] = "failed"
+                    return
+                }
+                try await Task.sleep(nanoseconds: 4_000_000_000)
+            }
+        } catch {
+            if !Task.isCancelled {
+                modelStatus[productID] = "failed"
+            }
         }
     }
 }

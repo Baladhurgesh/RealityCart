@@ -8,18 +8,22 @@ from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.meshy import ensure_model, get_model, usdz_path
 from app.pipeline import run_redesign
 from app.schemas import (
     CatalogPage,
+    CheckoutSession,
     HealthResponse,
     ProductOffer,
     RedesignResponse,
     RoomPlanPayload,
     SurfaceCalibration,
 )
-from app.shopify_mcp import get_product, search_catalog_page
+from app.shopify_mcp import create_shop_checkout, get_product, search_catalog_page
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -99,6 +103,56 @@ async def shopify_product(
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+class CheckoutRequest(BaseModel):
+    shop: str
+    variant_id: str
+    quantity: int = 1
+
+
+@app.post("/v1/checkout", response_model=CheckoutSession)
+async def checkout(body: CheckoutRequest) -> CheckoutSession:
+    """Open a Shop MCP checkout for one variant. Payment happens on the merchant page."""
+    if not body.shop or not body.variant_id:
+        raise HTTPException(status_code=400, detail="shop and variant_id are required")
+    try:
+        payload = await create_shop_checkout(
+            shop=body.shop,
+            variant_id=body.variant_id,
+            quantity=body.quantity,
+        )
+        return CheckoutSession.model_validate(payload)
+    except Exception as exc:
+        logger.exception("Checkout failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+class ModelGenerateRequest(BaseModel):
+    product_id: str
+    image_urls: list[str] = Field(default_factory=list)
+
+
+@app.post("/v1/models")
+async def start_model(body: ModelGenerateRequest):
+    """Start (or reuse) a Meshy USDZ for a product that has no merchant 3D file."""
+    return await ensure_model(body.product_id, body.image_urls)
+
+
+@app.get("/v1/models/{key}")
+async def model_status(key: str):
+    job = get_model(key)
+    if job is None:
+        raise HTTPException(status_code=404, detail="No model job for that product")
+    return job
+
+
+@app.get("/v1/models/{key}/file")
+async def model_file(key: str):
+    path = usdz_path(key)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Model is not ready")
+    return FileResponse(path, media_type="model/vnd.usdz+zip", filename="model.usdz")
 
 
 @app.post("/v1/redesign", response_model=RedesignResponse)

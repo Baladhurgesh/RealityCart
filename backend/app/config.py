@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     scene_model: str = "gemini-4-hydrogen"
     plan_model: str = "gemini-4-carbon"
     decision_model: str = "gemini-decision-1"
+    meshy_api_key: str = ""
+    # meshy-6-lite is the fast textured preview used for the phone overlay.
+    meshy_model: str = "meshy-6-lite"
 
     decision_fit_threshold: float = 0.55
     decision_style_threshold: float = 0.50

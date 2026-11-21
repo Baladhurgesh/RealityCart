@@ -94,14 +94,66 @@ struct ProductOfferDTO: Codable, Identifiable {
     let product_url: String?
     let vendor: String?
     let has_3d: Bool?
+    let model_url: String?
+    let model_format: String?
     // Added with the Shop MCP integration (all optional → backward compatible).
     let price_max_usd: Double?
     let image_urls: [String]?
     let seller_domain: String?
+    let variant_id: String?
     let rating: Double?
     let review_count: Int?
     let available: Bool?
     let dimensions_hint: String?
+    let width_m: Double?
+    let depth_m: Double?
+    let height_m: Double?
+}
+
+extension ProductOfferDTO {
+    /// Listing size in meters, when every axis is known.
+    var boxMeters: (width: Float, height: Float, depth: Float)? {
+        guard let width_m, let height_m, let depth_m,
+              width_m > 0.02, height_m > 0.02, depth_m > 0.02 else { return nil }
+        return (Float(width_m), Float(height_m), Float(depth_m))
+    }
+}
+
+extension ProductOfferDTO {
+    /// Merchant USDZ RealityKit/SceneKit can load. GLB is ignored (no iOS loader).
+    var usdzURL: URL? {
+        guard let raw = model_url, let url = URL(string: raw) else { return nil }
+        let format = (model_format ?? "").lowercased()
+        let ext = url.pathExtension.lowercased()
+        if format == "usdz" || ext == "usdz" || ext == "reality" {
+            return url
+        }
+        return nil
+    }
+}
+
+struct CheckoutTotalDTO: Codable, Identifiable {
+    var id: String { type }
+    let type: String
+    let label: String
+    let amount_display: String
+}
+
+struct CheckoutLinkDTO: Codable, Identifiable {
+    var id: String { url }
+    let type: String
+    let url: String
+}
+
+struct CheckoutSessionDTO: Codable, Identifiable {
+    let id: String
+    let status: String
+    let currency: String?
+    let shop: String
+    let continue_url: String?
+    let totals: [CheckoutTotalDTO]
+    let messages: [String]
+    let links: [CheckoutLinkDTO]
 }
 
 struct DecisionResultDTO: Codable {

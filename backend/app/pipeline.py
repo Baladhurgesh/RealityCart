@@ -6,8 +6,9 @@ import logging
 import time
 
 from app.decisions import evaluate_candidate
-from app.gemini_plan import create_design_plan, replan_after_failures
+from app.gemini_plan import create_design_plan, replan_after_failures, resolve_proxy_model
 from app.gemini_scene import analyze_scene
+from app.meshy import ensure_model as ensure_meshy_model
 from app.schemas import (
     PipelineStep,
     PlacedProduct,
@@ -18,6 +19,39 @@ from app.schemas import (
 from app.shopify_mcp import search_catalog
 
 logger = logging.getLogger(__name__)
+
+# Used only for axes the listing never states.
+_BOX_FALLBACK = {
+    "lamp": (0.28, 0.28, 1.55),
+    "sideboard": (1.10, 0.40, 0.70),
+    "tray": (0.22, 0.16, 0.04),
+    "organizer": (0.20, 0.15, 0.12),
+    "plant": (0.22, 0.22, 0.45),
+    "shelf": (0.80, 0.25, 0.08),
+}
+
+
+def _resolve_box(product, proxy: str) -> tuple[float, float, float, str]:
+    """Width, depth, height in meters. Listing measurements win; typical size fills gaps."""
+    fallback = _BOX_FALLBACK.get(proxy, (0.30, 0.30, 0.30))
+    product_vals = (product.width_m, product.depth_m, product.height_m)
+    resolved = []
+    sources = []
+    for product_val, fallback_val in zip(product_vals, fallback):
+        if product_val and product_val > 0.02:
+            resolved.append(float(product_val))
+            sources.append("product")
+        else:
+            resolved.append(float(fallback_val))
+            sources.append("estimate")
+    if all(s == "product" for s in sources):
+        origin = "product"
+    elif "product" in sources:
+        origin = "mixed"
+    else:
+        origin = "estimated"
+    return resolved[0], resolved[1], resolved[2], origin
+
 
 REGION_OFFSETS = {
     "left": {"x": -0.35, "y": 0.0, "z": 0.0},
@@ -167,18 +201,51 @@ async def run_redesign(
 
             price = chosen.price_usd or 0.0
             remaining -= price
+            # Re-resolve using the *chosen product title* so a ceramic tray
+            # doesn't render as the same tall box as a sideboard cabinet.
+            proxy = resolve_proxy_model(
+                category=slot.category,
+                proxy_model=slot.proxy_model,
+                search_query=slot.search_query,
+                product_title=chosen.title,
+            )
+            box_w, box_d, box_h, box_origin = _resolve_box(chosen, proxy)
+            chosen = chosen.model_copy(
+                update={"width_m": box_w, "depth_m": box_d, "height_m": box_h}
+            )
+            logger.info(
+                "placement %s → %r proxy=%s has_3d=%s model=%s box=%.2fx%.2fx%.2fm (%s) price=%s",
+                slot.id,
+                chosen.title,
+                proxy,
+                bool(chosen.model_url),
+                chosen.model_format or "-",
+                box_w,
+                box_d,
+                box_h,
+                box_origin,
+                price,
+            )
             filled.append(
                 PlacedProduct(
                     slot_id=slot.id,
                     category=slot.category,
                     product=chosen,
                     decision=chosen_decision,
-                    proxy_model=slot.proxy_model or slot.category,
+                    proxy_model=proxy,
                     position=_placement_position(slot.region, height),
                     scale=1.0,
                     rejected_alternatives=rejected[:3],
                 )
             )
+            if not chosen.model_url:
+                photos = [chosen.image_url] if chosen.image_url else []
+                photos.extend(chosen.image_urls or [])
+                try:
+                    job = await ensure_meshy_model(chosen.id, photos)
+                    logger.info("meshy kickoff %s status=%s", chosen.id[:24], job.status)
+                except Exception:
+                    logger.exception("meshy kickoff failed for %s", chosen.id)
         return filled
 
     t = time.perf_counter()

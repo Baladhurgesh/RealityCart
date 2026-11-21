@@ -145,14 +145,44 @@ class ProductOffer(BaseModel):
     product_url: str | None = None
     vendor: str | None = None  # seller name
     seller_domain: str | None = None
+    variant_id: str | None = None
     rating: float | None = None
     review_count: int | None = None
     available: bool | None = None
     has_3d: bool = False
+    # Direct merchant 3D asset when Catalog media includes model_3d (usually USDZ).
+    model_url: str | None = None
+    model_format: str | None = None  # "usdz" | "glb"
     dimensions_hint: str | None = None
+    # Parsed listing size in meters. Missing axes are filled at placement time.
+    width_m: float | None = None
+    depth_m: float | None = None
+    height_m: float | None = None
     variants: list[ProductVariant] = Field(default_factory=list)
     # Full UCP product for debugging; never sent to clients.
     raw: dict[str, Any] | None = Field(default=None, exclude=True)
+
+
+class CheckoutTotal(BaseModel):
+    type: str
+    label: str
+    amount_display: str
+
+
+class CheckoutLink(BaseModel):
+    type: str
+    url: str
+
+
+class CheckoutSession(BaseModel):
+    id: str
+    status: str
+    currency: str = "USD"
+    shop: str
+    continue_url: str | None = None
+    totals: list[CheckoutTotal] = Field(default_factory=list)
+    messages: list[str] = Field(default_factory=list)
+    links: list[CheckoutLink] = Field(default_factory=list)
 
 
 class CatalogPage(BaseModel):

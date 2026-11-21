@@ -1,5 +1,22 @@
+import CryptoKit
 import Foundation
 import UIKit
+
+enum ModelKey {
+    /// Same 32-hex prefix the backend uses for the Meshy cache.
+    static func make(_ productID: String) -> String {
+        let digest = SHA256.hash(data: Data(productID.utf8))
+        return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+struct ModelJobDTO: Decodable {
+    let product_id: String
+    let key: String
+    let status: String
+    let progress: Int?
+    let error: String?
+}
 
 enum APIError: LocalizedError {
     case invalidURL
@@ -108,6 +125,41 @@ final class APIClient {
         } catch {
             throw APIError.decoding(error)
         }
+    }
+
+    func startGeneratedModel(productID: String, imageURLs: [String]) async throws -> ModelJobDTO {
+        let url = baseURL.appendingPathComponent("v1/models")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: Any] = ["product_id": productID, "image_urls": imageURLs]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Self.throwIfNeeded(response, data: data)
+        return try JSONDecoder().decode(ModelJobDTO.self, from: data)
+    }
+
+    func generatedModelStatus(key: String) async throws -> ModelJobDTO {
+        let url = baseURL.appendingPathComponent("v1/models/\(key)")
+        let (data, response) = try await URLSession.shared.data(from: url)
+        try Self.throwIfNeeded(response, data: data)
+        return try JSONDecoder().decode(ModelJobDTO.self, from: data)
+    }
+
+    func startCheckout(shop: String, variantID: String) async throws -> CheckoutSessionDTO {
+        let url = baseURL.appendingPathComponent("v1/checkout")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload = ["shop": shop, "variant_id": variantID, "quantity": 1] as [String: Any]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Self.throwIfNeeded(response, data: data)
+        return try JSONDecoder().decode(CheckoutSessionDTO.self, from: data)
+    }
+
+    func generatedModelFileURL(key: String) -> URL {
+        baseURL.appendingPathComponent("v1/models/\(key)/file")
     }
 
     private static func throwIfNeeded(_ response: URLResponse, data: Data) throws {

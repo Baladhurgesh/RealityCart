@@ -21,4 +21,5 @@ eval/captures/*
 !eval/captures/.gitkeep
 
 backend/tools
+backend/data/
 requirements-dev.txt

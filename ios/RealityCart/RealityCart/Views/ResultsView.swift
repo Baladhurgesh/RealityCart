@@ -1,3 +1,4 @@
+import SafariServices
 import SwiftUI
 
 struct ResultsView: View {
@@ -119,7 +120,11 @@ struct BudgetMeter: View {
 }
 
 struct ProductRow: View {
+    @EnvironmentObject private var session: RedesignSession
     let placement: PlacedProductDTO
+    @State private var paying = false
+    @State private var payError: String?
+    @State private var checkout: CheckoutSessionDTO?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -150,15 +155,148 @@ struct ProductRow: View {
                 }
             }
 
+            if placement.product.variant_id != nil, placement.product.seller_domain != nil {
+                Button {
+                    Task { await startCheckout() }
+                } label: {
+                    if paying {
+                        ProgressView()
+                    } else {
+                        Label("Pay with Shop", systemImage: "creditcard")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(paying)
+            }
+
+            if let payError {
+                Text(payError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+
             if let urlString = placement.product.product_url, let url = URL(string: urlString) {
-                Link("Buy on Shopify merchant", destination: url)
+                Link("View on merchant site", destination: url)
                     .font(.caption)
             }
 
-            Text("3D proxy: \(placement.proxy_model)")
+            Text(overlayCaption)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 4)
+        .sheet(item: $checkout) { session in
+            CheckoutPaySheet(checkout: session)
+        }
     }
+
+    private func startCheckout() async {
+        guard let shop = placement.product.seller_domain,
+              let variantID = placement.product.variant_id else { return }
+        paying = true
+        payError = nil
+        defer { paying = false }
+        do {
+            checkout = try await session.startCheckout(shop: shop, variantID: variantID)
+        } catch {
+            payError = error.localizedDescription
+        }
+    }
+
+    private var overlayCaption: String {
+        if placement.product.usdzURL != nil {
+            return "3D: merchant model"
+        }
+        if session.generatedModels[placement.product.id] != nil {
+            return "3D: model generated from the product photo"
+        }
+        if session.modelStatus[placement.product.id] == "generating" {
+            return "3D: generating a model from the product photo…"
+        }
+        if let box = placement.product.boxMeters {
+            let hint = placement.product.dimensions_hint.map { " (\($0))" } ?? ""
+            return String(
+                format: "3D: %.0f × %.0f × %.0f cm box%@",
+                box.width * 100,
+                box.depth * 100,
+                box.height * 100,
+                hint
+            )
+        }
+        return "3D: category stand-in (\(placement.proxy_model))"
+    }
+}
+
+struct CheckoutPaySheet: View {
+    let checkout: CheckoutSessionDTO
+    @Environment(\.dismiss) private var dismiss
+    @State private var payURL: URL?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Amount") {
+                    ForEach(checkout.totals) { line in
+                        HStack {
+                            Text(line.label)
+                            Spacer()
+                            Text(line.amount_display).fontWeight(.semibold)
+                        }
+                    }
+                }
+                if !checkout.messages.isEmpty {
+                    Section("Before you pay") {
+                        ForEach(Array(checkout.messages.enumerated()), id: \.offset) { _, message in
+                            Text(message).font(.caption)
+                        }
+                    }
+                }
+                if !checkout.links.isEmpty {
+                    Section("Merchant policies") {
+                        ForEach(checkout.links) { link in
+                            if let url = URL(string: link.url) {
+                                Link(link.type, destination: url)
+                            }
+                        }
+                    }
+                }
+                Section {
+                    Button("Continue to pay") {
+                        if let raw = checkout.continue_url, let url = URL(string: raw) {
+                            payURL = url
+                        }
+                    }
+                    .disabled(checkout.continue_url == nil)
+                } footer: {
+                    Text("This opens the merchant’s Shop checkout. The order is placed only after you pay there.")
+                }
+            }
+            .navigationTitle("Pay with Shop")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+            .sheet(isPresented: Binding(
+                get: { payURL != nil },
+                set: { if !$0 { payURL = nil } }
+            )) {
+                if let payURL {
+                    SafariView(url: payURL)
+                        .ignoresSafeArea()
+                }
+            }
+        }
+    }
+}
+
+struct SafariView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        SFSafariViewController(url: url)
+    }
+
+    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }

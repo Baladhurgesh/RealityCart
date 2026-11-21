@@ -43,31 +43,114 @@ Rules:
 - The space may be any room (living room, bedroom, kitchen, office, studio, etc.). Match products to that space.
 - Honor keep_object_ids for furniture/objects the user wants to keep.
 - Propose 2–4 purchasable slots that fit available_positions and remaining budget.
-- Categories should map to proxies when possible: lamp, organizer, plant, monitor_stand, shelf, cable_tray, chair, table, sofa, bed, storage.
+- Categories should map to proxies when possible: lamp, sideboard, cabinet, tray, organizer, plant, monitor_stand, shelf, cable_tray, chair, table, sofa, bed, storage.
+- proxy_model must match the *shape* of the product (tray ≠ tall cabinet). Prefer: lamp | sideboard | tray | organizer | plant | shelf.
 - search_query must be concrete for Shopify catalog search and appropriate to the room type.
 - Leave headroom so sum(max_price_usd) <= budget_usd * 0.95.
 """
 
+# Canonical procedural proxies rendered on iOS (not Shopify product meshes).
 CATEGORY_PROXY = {
     "desk_lamp": "lamp",
     "floor_lamp": "lamp",
     "table_lamp": "lamp",
     "lamp": "lamp",
+    "lighting": "lamp",
     "organizer": "organizer",
-    "storage": "organizer",
+    "desk_organizer": "organizer",
+    "tabletop_organizer": "organizer",
+    "storage": "sideboard",
+    "cabinet": "sideboard",
+    "sideboard": "sideboard",
+    "credenza": "sideboard",
+    "console": "sideboard",
+    "dresser": "sideboard",
+    "media_console": "sideboard",
+    "tray": "tray",
+    "catchall": "tray",
+    "catch_all": "tray",
+    "dish": "tray",
+    "bowl": "tray",
     "plant": "plant",
     "monitor_stand": "monitor_stand",
     "monitor_arm": "monitor_stand",
     "shelf": "shelf",
     "wall_shelf": "shelf",
     "bookshelf": "shelf",
-    "cable_tray": "cable_tray",
-    "cable_management": "cable_tray",
+    "accent_shelf": "shelf",
+    "cable_tray": "tray",
+    "cable_management": "tray",
     "chair": "organizer",
-    "table": "shelf",
-    "sofa": "shelf",
-    "bed": "shelf",
+    "table": "sideboard",
+    "sofa": "sideboard",
+    "bed": "sideboard",
 }
+
+# Keyword → proxy (checked against category + query + product title).
+_PROXY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("lamp", ("lamp", "lighting", "sconce", "pendant", "lantern")),
+    ("tray", ("tray", "catchall", "catch-all", "catch all", "dish", "bowl", "valet")),
+    (
+        "sideboard",
+        (
+            "sideboard",
+            "cabinet",
+            "credenza",
+            "console",
+            "dresser",
+            "media console",
+            "buffet",
+            "armoire",
+            "wardrobe",
+        ),
+    ),
+    ("plant", ("plant", "planter", "succulent")),
+    ("shelf", ("shelf", "bookshelf", "bookcase", "floating shelf")),
+    ("organizer", ("organizer", "caddy", "desk tidy", "pen holder")),
+]
+
+
+def resolve_proxy_model(
+    *,
+    category: str | None = None,
+    proxy_model: str | None = None,
+    search_query: str | None = None,
+    product_title: str | None = None,
+) -> str:
+    """Pick a procedural proxy that matches the product shape, not just the slot id."""
+    known = {
+        "lamp",
+        "sideboard",
+        "tray",
+        "organizer",
+        "plant",
+        "shelf",
+        "monitor_stand",
+        "cable_tray",
+        "storage",
+    }
+    if proxy_model:
+        key = proxy_model.lower().strip().replace(" ", "_").replace("-", "_")
+        if key in known:
+            return "sideboard" if key == "storage" else ("tray" if key == "cable_tray" else key)
+        mapped = CATEGORY_PROXY.get(key)
+        if mapped:
+            return mapped
+
+    blob = " ".join(
+        part for part in (category, search_query, product_title, proxy_model) if part
+    ).lower()
+
+    for proxy, keywords in _PROXY_KEYWORDS:
+        if any(k in blob for k in keywords):
+            return proxy
+
+    if category:
+        mapped = CATEGORY_PROXY.get(category.lower().strip().replace(" ", "_"))
+        if mapped:
+            return mapped
+
+    return "organizer"
 
 
 def _fallback_plan(scene: SceneAnalysis, budget_usd: float, intent: str) -> DesignPlan:
@@ -136,7 +219,11 @@ def _fallback_plan(scene: SceneAnalysis, budget_usd: float, intent: str) -> Desi
 def _normalize_proxies(plan: DesignPlan) -> DesignPlan:
     slots = []
     for slot in plan.slots:
-        proxy = slot.proxy_model or CATEGORY_PROXY.get(slot.category, slot.category)
+        proxy = resolve_proxy_model(
+            category=slot.category,
+            proxy_model=slot.proxy_model,
+            search_query=slot.search_query,
+        )
         slots.append(slot.model_copy(update={"proxy_model": proxy}))
     return plan.model_copy(update={"slots": slots})
 
