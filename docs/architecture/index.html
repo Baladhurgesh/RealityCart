@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="RealityCart architecture: LiDAR scan to a shoppable redesign with Gemini 4, the Decisions API and Shopify MCP.">
+<title>RealityCart Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one wide pipeline board (scrolls sideways on phones) over a to-scale time bar and a grid of stage cards. */
+:root {
+  --bg: #F6F8F7;            /* off-white, faint teal bias */
+  --surface: #FFFFFF;
+  --ink: #12211F;
+  --muted: #56645F;
+  --line: #D7E0DD;
+  --grid: #E6EDEA;
+  --teal: #0A626E;          /* brand: Gemini 4 stages */
+  --teal-soft: #E1EFEF;
+  --code: #4D5B66;          /* deterministic code */
+  --code-soft: #ECEFF2;
+  --ext: #9A5B12;           /* external services */
+  --ext-soft: #F6EBDC;
+  --phone: #3B4A8C;         /* iPhone */
+  --phone-soft: #E7E9F5;
+  --good: #23784A;
+  --bad: #B3261E;
+  --font-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --font-body: "Instrument Sans", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1615; --surface: #15201F; --ink: #E7EFED; --muted: #9AABA6; --line: #2A3A38; --grid: #1A2625;
+    --teal: #4FC0C4; --teal-soft: #123335; --code: #A9B6C0; --code-soft: #1E2930;
+    --ext: #E2A55A; --ext-soft: #2E2416; --phone: #A3AEF0; --phone-soft: #1E2340;
+    --good: #5CC98A; --bad: #F08A80; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1615; --surface: #15201F; --ink: #E7EFED; --muted: #9AABA6; --line: #2A3A38; --grid: #1A2625;
+  --teal: #4FC0C4; --teal-soft: #123335; --code: #A9B6C0; --code-soft: #1E2930;
+  --ext: #E2A55A; --ext-soft: #2E2416; --phone: #A3AEF0; --phone-soft: #1E2340;
+  --good: #5CC98A; --bad: #F08A80; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 56px;
+}
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 28px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: clamp(28px, 4.4vw, 44px); font-weight: 700; line-height: 1.05; }
+h2 { font-size: 22px; font-weight: 700; }
+h3 { font-size: 17px; font-weight: 700; }
+p { margin: 0; }
+.mono { font-family: var(--font-mono); font-size: 12.5px; }
+.eyebrow { font-size: 11.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+
+/* header */
+header { display: grid; grid-template-columns: auto 1fr; gap: 18px 20px; align-items: center; }
+header img { width: 64px; height: 64px; border-radius: 16px; }
+.lede { grid-column: 1 / -1; max-width: 68ch; color: var(--muted); font-size: 17px; }
+.legend { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; border: 1.5px solid; }
+.sw.ai { background: var(--teal-soft); border-color: var(--teal); }
+.sw.code { background: var(--code-soft); border-color: var(--code); }
+.sw.ext { background: var(--ext-soft); border-color: var(--ext); }
+.sw.phone { background: var(--phone-soft); border-color: var(--phone); }
+
+/* board */
+.board { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; display: grid; }
+.board-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px 6px; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+button.play {
+  font: 600 14px var(--font-body); color: var(--surface); background: var(--teal); border: 0; border-radius: 999px;
+  padding: 9px 18px; cursor: pointer; display: inline-flex; gap: 8px; align-items: center;
+}
+button.play:hover { filter: brightness(1.08); }
+button.play:focus-visible, .node:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+button.play[disabled] { opacity: .6; cursor: default; }
+.clock { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 14px; color: var(--ink); min-width: 92px; }
+.status { padding: 0 18px 4px; font-size: 14px; color: var(--muted); min-height: 1.6em; }
+.status b { color: var(--ink); font-weight: 600; }
+.scroller { overflow-x: auto; padding: 6px 8px 14px; }
+svg.diagram { display: block; width: 100%; min-width: 980px; height: auto; }
+
+/* svg styling */
+.gridline { stroke: var(--grid); stroke-width: 1; }
+.edge { fill: none; stroke: var(--line); stroke-width: 2.2; }
+.edge.loop { stroke-dasharray: 6 5; opacity: .7; }
+.ghost { fill: none; stroke: none; }
+.node { cursor: pointer; }
+.node rect.box { stroke-width: 1.6; transition: transform .2s; }
+.node:hover rect.box, .node.active rect.box { stroke-width: 2.6; }
+.node.ai rect.box { fill: var(--teal-soft); stroke: var(--teal); }
+.node.code rect.box { fill: var(--code-soft); stroke: var(--code); }
+.node.ext rect.box { fill: var(--ext-soft); stroke: var(--ext); }
+.node.phone rect.box { fill: var(--phone-soft); stroke: var(--phone); }
+.node.active rect.box { filter: drop-shadow(0 0 7px color-mix(in srgb, var(--teal) 45%, transparent)); }
+.t-kind { font: 600 9.5px var(--font-body); letter-spacing: .09em; text-transform: uppercase; }
+.node.ai .t-kind { fill: var(--teal); } .node.code .t-kind { fill: var(--code); }
+.node.ext .t-kind { fill: var(--ext); } .node.phone .t-kind { fill: var(--phone); }
+.t-name { font: 700 15px var(--font-display); fill: var(--ink); }
+.t-sub { font: 400 11px var(--font-mono); fill: var(--muted); }
+.t-lane { font: 600 12px var(--font-body); fill: var(--ink); }
+.t-q { font: 400 10.5px var(--font-mono); fill: var(--muted); }
+.guard rect { fill: var(--surface); stroke: var(--code); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.guard text { font: 500 10.5px var(--font-body); fill: var(--code); }
+.verdict { font: 600 11.5px var(--font-mono); }
+.verdict.good { fill: var(--good); } .verdict.bad { fill: var(--bad); }
+.chip rect { fill: var(--surface); stroke: var(--bad); stroke-width: 1.2; }
+.chip text { font: 500 10.5px var(--font-mono); fill: var(--bad); }
+.dot { fill: var(--teal); }
+.dot.halo { fill: var(--teal); opacity: .22; }
+.fade { transition: opacity .35s; }
+
+/* time bar */
+.timing { display: grid; gap: 12px; }
+.bar { display: flex; height: 34px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); background: var(--surface); }
+.bar div { display: flex; align-items: center; padding: 0 8px; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; min-width: 0; }
+.bar .h { background: var(--teal-soft); color: var(--teal); }
+.bar .c { background: color-mix(in srgb, var(--teal-soft) 60%, var(--surface)); color: var(--teal); border-left: 1px solid var(--line); }
+.bar .s { background: var(--ext-soft); color: var(--ext); border-left: 1px solid var(--line); }
+.bar .r { background: repeating-linear-gradient(135deg, var(--teal-soft) 0 8px, var(--surface) 8px 14px); color: var(--teal); border-left: 1px solid var(--line); }
+.scale { position: relative; height: 16px; margin: 0 22px 0 4px; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.scale span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.scale span:first-child { transform: none; }
+.timing ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 13.5px; color: var(--muted); }
+.timing li b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* stage cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 16px 14px;
+  display: grid; gap: 9px; align-content: start; min-width: 0; scroll-margin-top: 16px; transition: border-color .2s, box-shadow .2s;
+}
+.card.hl { border-color: var(--teal); box-shadow: 0 0 0 3px color-mix(in srgb, var(--teal) 22%, transparent); }
+.card .top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.kind { font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.kind.ai { color: var(--teal); } .kind.code { color: var(--code); } .kind.ext { color: var(--ext); } .kind.phone { color: var(--phone); }
+.time { font-family: var(--font-mono); font-size: 12px; color: var(--muted); white-space: nowrap; }
+.card .who { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.card dl { margin: 0; display: grid; gap: 7px; }
+.card dt { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.card dd { margin: 0; font-size: 14px; }
+.card dd.broke { border-left: 2px solid var(--bad); padding-left: 9px; }
+.card dd.broke b { color: var(--bad); font-weight: 600; }
+
+.why { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.why div { border-top: 2px solid var(--teal); padding-top: 10px; display: grid; gap: 4px; }
+.why .big { font-family: var(--font-display); font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.why p { color: var(--muted); font-size: 14px; }
+footer { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+
+@media (max-width: 560px) {
+  header img { width: 52px; height: 52px; }
+  .lede { font-size: 15.5px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fade, .node rect.box, .card { transition: none; }
+}
+</style>
+
+<style>html{-webkit-text-size-adjust:100%} body{margin:0} :root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img alt="RealityCart logo" src="data:image/png;base64,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">
+    <div>
+      <div class="eyebrow">Element 119 · Gemini hackathon</div>
+      <h1>RealityCart architecture</h1>
+    </div>
+    <p class="lede">A LiDAR scan and one sentence become a redesign you can buy. Two Gemini 4 models understand and plan, the Decisions API gates every real Shopify product, and plain code checks each AI step before anything reaches the cart.</p>
+    <div class="legend" aria-label="Legend">
+      <span><i class="sw phone"></i>iPhone app</span>
+      <span><i class="sw ai"></i>Gemini 4 model</span>
+      <span><i class="sw code"></i>Code check (no AI)</span>
+      <span><i class="sw ext"></i>Commerce service</span>
+    </div>
+  </header>
+
+  <section class="board" aria-label="Pipeline diagram">
+    <div class="board-top">
+      <div>
+        <div class="eyebrow">One real run</div>
+        <h2>Living room · “keep my sofa, add a floor lamp and storage, mostly black” · $600</h2>
+      </div>
+      <div class="controls">
+        <span class="clock" id="clock" aria-live="off">26.8 s</span>
+        <button class="play" id="play" type="button"><span aria-hidden="true">▶</span> <span id="playLabel">Play the run</span></button>
+      </div>
+    </div>
+    <p class="status" id="status" aria-live="polite">Finished: <b>3 of 3 items found, $131.21 of $600, in 26.8 s</b>. Press play to watch the request move through the pipeline. Click any box for details.</p>
+    <div class="scroller">
+      <svg class="diagram" id="diagram" viewBox="0 0 1200 470" role="img" aria-label="RealityCart pipeline: iPhone scan, room measurement, Hydrogen, Neon, Shopify and Decisions for three items in parallel with a looser retry, a re-plan loop used only when an item stays empty, and results on the iPhone.">
+        <g id="gridlines"></g>
+
+        <!-- edges -->
+        <path class="edge" id="e1" d="M145 200 H165"/>
+        <path class="edge" id="e2" d="M295 200 H325"/>
+        <path class="edge" id="e3" d="M455 200 H485"/>
+        <path class="edge" id="f0" d="M615 200 C640 200 638 110 660 110"/>
+        <path class="edge" id="f1" d="M615 200 H660"/>
+        <path class="edge" id="f2" d="M615 200 C640 200 638 290 660 290"/>
+        <path class="edge" id="m0" d="M780 110 H820"/>
+        <path class="edge" id="m1" d="M780 200 H820"/>
+        <path class="edge" id="m2" d="M780 290 H820"/>
+        <path class="edge" id="o0" d="M940 110 C985 110 985 200 1020 200"/>
+        <path class="edge" id="o2" d="M940 290 C985 290 985 200 1020 200"/>
+        <path class="edge loop" id="loopA" d="M940 200 H962 Q972 200 972 210 V408 Q972 418 962 418 H860"/>
+        <path class="edge loop" id="loopB" d="M740 418 H648 Q638 418 638 408 V214 Q638 204 648 204 H660"/>
+        <path class="edge" id="o1" d="M940 200 H1020"/>
+        <path class="ghost" id="b0" d="M820 110 H780"/>
+        <path class="ghost" id="b1" d="M820 200 H780"/>
+
+        <!-- nodes -->
+        <g class="node phone" data-stage="capture" tabindex="0" role="button" aria-label="iPhone RoomPlan scan">
+          <rect class="box" x="15" y="160" width="130" height="80" rx="12"/>
+          <text class="t-kind" x="27" y="182">iPhone</text>
+          <text class="t-name" x="27" y="204">RoomPlan scan</text>
+          <text class="t-sub" x="27" y="224">LiDAR + photo</text>
+        </g>
+        <g class="node code" data-stage="measure" tabindex="0" role="button" aria-label="Measure the room, code">
+          <rect class="box" x="165" y="160" width="130" height="80" rx="12"/>
+          <text class="t-kind" x="177" y="182">Code</text>
+          <text class="t-name" x="177" y="204">Measure room</text>
+          <text class="t-sub" x="177" y="224">4.20 × 3.80 m</text>
+        </g>
+        <g class="node ai" data-stage="hydrogen" tabindex="0" role="button" aria-label="Hydrogen, understand the room">
+          <rect class="box" x="325" y="160" width="130" height="80" rx="12"/>
+          <text class="t-kind" x="337" y="182">Gemini 4</text>
+          <text class="t-name" x="337" y="204">Hydrogen</text>
+          <text class="t-sub" x="337" y="224">understand room</text>
+        </g>
+        <g class="node ai" data-stage="plan" tabindex="0" role="button" aria-label="Neon, plan the redesign">
+          <rect class="box" x="485" y="160" width="130" height="80" rx="12"/>
+          <text class="t-kind" x="497" y="182">Gemini 4</text>
+          <text class="t-name" x="497" y="204">Neon</text>
+          <text class="t-sub" x="497" y="224">plan 3 items</text>
+        </g>
+
+        <g class="guard" data-stage="hydrogen">
+          <rect x="331" y="252" width="118" height="24" rx="12"/>
+          <text x="390" y="268" text-anchor="middle">✓ schema + real surfaces</text>
+        </g>
+        <g class="guard" data-stage="plan">
+          <rect x="491" y="252" width="118" height="24" rx="12"/>
+          <text x="550" y="268" text-anchor="middle">✓ budget, size, spots</text>
+        </g>
+
+        <g class="node ext" data-stage="shopify" tabindex="0" role="button" aria-label="Shopify product search">
+          <rect class="box" x="660" y="52" width="120" height="292" rx="12"/>
+          <text class="t-kind" x="672" y="72">Shopify MCP</text>
+          <text class="t-name" x="672" y="92" style="font-size:14px">Find products</text>
+          <text class="t-lane" x="672" y="114">floor lamp</text>
+          <text class="t-q" x="672" y="129">black arc floor lamp</text>
+          <text class="t-lane" x="672" y="204">storage</text>
+          <text class="t-q" x="672" y="219">narrow black cabinet</text>
+          <text class="t-lane" x="672" y="294">tray</text>
+          <text class="t-q" x="672" y="309">small black tray</text>
+        </g>
+        <g class="node ai" data-stage="decisions" tabindex="0" role="button" aria-label="Decisions API gate">
+          <rect class="box" x="820" y="52" width="120" height="292" rx="12"/>
+          <text class="t-kind" x="832" y="72">Decisions API</text>
+          <text class="t-name" x="832" y="92" style="font-size:14px">Gate each</text>
+          <text class="verdict good fade" id="v0" x="832" y="114">✓ after retry</text>
+          <text class="verdict good fade" id="v1" x="832" y="204">✓ after retry</text>
+          <text class="verdict good fade" id="v2" x="832" y="294">✓ best of 2</text>
+        </g>
+        <g class="guard" data-stage="decisions">
+          <rect x="826" y="20" width="108" height="24" rx="12"/>
+          <text x="880" y="36" text-anchor="middle">✓ code precheck</text>
+        </g>
+        <g class="chip fade" id="chip0">
+          <rect x="806" y="136" width="148" height="22" rx="6"/>
+          <text x="880" y="151" text-anchor="middle">1.52 m vs 0.45 m max</text>
+        </g>
+        <g class="chip fade" id="chip1">
+          <rect x="806" y="226" width="148" height="22" rx="6"/>
+          <text x="880" y="241" text-anchor="middle">0.82 m vs 0.55 m max</text>
+        </g>
+
+        <g class="node ai" data-stage="replan" tabindex="0" role="button" aria-label="Neon re-plan, only when an item stays empty">
+          <rect class="box" x="740" y="384" width="120" height="68" rx="12"/>
+          <text class="t-kind" x="752" y="404">Neon again</text>
+          <text class="t-name" x="752" y="423" style="font-size:14px">Re-plan if empty</text>
+          <text class="t-sub fade" id="rp" x="752" y="441">not needed this run</text>
+        </g>
+
+        <g class="node phone" data-stage="results" tabindex="0" role="button" aria-label="Results on the iPhone">
+          <rect class="box" x="1020" y="140" width="160" height="120" rx="12"/>
+          <text class="t-kind" x="1032" y="162">iPhone</text>
+          <text class="t-name" x="1032" y="184">Plan · 3D · Cart</text>
+          <text class="t-sub fade" id="r1" x="1032" y="206">3 / 3 items found</text>
+          <text class="t-sub fade" id="r2" x="1032" y="224">$131.21 of $600</text>
+          <text class="t-sub fade" id="r3" x="1032" y="242">1 checkout per store</text>
+        </g>
+
+        <g id="dots"></g>
+      </svg>
+    </div>
+  </section>
+
+  <section class="timing" aria-label="Where the time goes">
+    <div>
+      <div class="eyebrow">Where the 26.8 seconds go</div>
+      <h2>Thinking is slow, checking is fast</h2>
+    </div>
+    <div class="bar" role="img" aria-label="Hydrogen 10.1 seconds, Neon 13.0 seconds, Shopify and Decisions 3.7 seconds">
+      <div class="h" style="flex:10.1">Hydrogen</div>
+      <div class="c" style="flex:13.0">Neon</div>
+      <div class="s" style="flex:3.7" title="Shopify + Decisions">Shop</div>
+    </div>
+    <div class="scale" aria-hidden="true"><span style="left:0%">0 s</span><span style="left:37.31%">10 s</span><span style="left:74.63%">20 s</span><span style="left:100%">26.8 s</span></div>
+    <ul>
+      <li>Hydrogen <b>10.1 s</b></li>
+      <li>Neon <b>13.0 s</b></li>
+      <li>Shopify + Decisions, all three items at once <b>3.7 s</b> for 15 products</li>
+      <li>Re-plan <b>0 s</b>: not needed, the looser retry found every item</li>
+    </ul>
+  </section>
+
+  <section aria-label="Stages">
+    <div style="display:grid;gap:4px;margin-bottom:14px">
+      <div class="eyebrow">Every stage</div>
+      <h2>What each step does, what checks it, and where it broke in testing</h2>
+    </div>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section class="why" aria-label="Why the media matters">
+    <div><span class="big">0.82 m vs 0.55 m</span><p>LiDAR gives real metres, so a cabinet that cannot fit the gap is rejected with an exact reason, before any model is asked. A text prompt never knew the gap was 55 cm.</p></div>
+    <div><span class="big">style 0.10</span><p>A narrow cabinet that fit the gap was still rejected: the Decisions API saw from its photo that the colour clashed. Text alone scored a yellow sofa 0.40; the photo scored it 0.86.</p></div>
+    <div><span class="big">56 tests</span><p>Every failure we hit is now a test: schema breaks, wrong surfaces, bad sizes, budget overruns, hung model calls.</p></div>
+  </section>
+
+  <footer>
+    <span>SwiftUI · RoomPlan · RealityKit · Speech</span>
+    <span>FastAPI (Python)</span>
+    <span>gemini-4-hydrogen · gemini-4-neon · gemini-decision-1</span>
+    <span>Shop MCP + Shopify Catalog MCP</span>
+    <span>Meshy for product 3D models</span>
+  </footer>
+</div>
+
+<script>
+(() => {
+  const STAGES = [
+    { id: "capture", kind: "phone", label: "iPhone", name: "RoomPlan scan", who: "SwiftUI · RoomPlan · Speech", time: "~1 min scanning",
+      does: "LiDAR scan of any room: walls and furniture as boxes with real sizes, plus a photo. The brief is typed or spoken, with a budget slider.",
+      check: "Sends photo + RoomPlan JSON + brief + budget to POST /v1/redesign.",
+      broke: null },
+    { id: "measure", kind: "code", label: "Code", name: "Measure the room", who: "scene_geometry.py", time: "instant",
+      does: "Room footprint from wall positions, floor level, and the real height of every table and storage top. These numbers are never left to a model.",
+      check: "This run: floor 4.20 × 3.80 m, coffee table top 0.45 m, console top 0.52 m.",
+      broke: "An early version made a 0.55 m chair the main surface. Now: floor plus table tops only." },
+    { id: "hydrogen", kind: "ai", label: "Gemini 4", name: "Hydrogen: understand the room", who: "gemini-4-hydrogen", time: "~10 s",
+      does: "Reads the photo together with the measurements: room type, style, colours, which scanned objects are visible, small items LiDAR misses (plants, cups, curtains), open spots, and image problems such as dim or blurry.",
+      check: "Fixed JSON schema. It may only point at surfaces we give it; anything else is remapped and logged.",
+      broke: "Answered lighting: “natural” and the whole parse was thrown away. Now the schema is enforced and failures keep the measurements." },
+    { id: "plan", kind: "ai", label: "Gemini 4", name: "Neon: plan the redesign", who: "gemini-4-neon", time: "~13 s",
+      does: "Decides what to keep, remove or replace, then up to 3 items to buy, each with a search query, a price cap, size limits and a priority.",
+      check: "Plan rules: items sit on real open spots, caps add up to 95% of the budget at most, sizes fit the surface and gap, size words like “narrow” are added.",
+      broke: "“Replace my sofa” squeezed a sectional into a 0.6 m gap. Now a replaced object frees its own footprint for the new one." },
+    { id: "shopify", kind: "ext", label: "Shopify MCP", name: "Find real products", who: "Shop MCP → Catalog MCP fallback", time: "~1 s per item, in parallel",
+      does: "Searches every item at the same time and returns live prices, store links and variant IDs. If nothing passes, one looser search runs.",
+      check: "This run: the lamp and the storage both needed the looser search (“black small floor lamp”, “black narrow storage cabinet”).",
+      broke: null },
+    { id: "decisions", kind: "ai", label: "Decisions API", name: "Decisions: gate every product", who: "gemini-decision-1", time: "0.5–1 s each, all at once",
+      does: "Two calibrated yes/no questions per product: does it fit, does it match the style? Judged from the product photo and the room photo. The best-scoring product wins, not the first.",
+      check: "Code first: price within the cap and size from the listing. In this run 5 of 15 products were rejected without a model call.",
+      broke: "Arc lamps 1.52–1.65 m wide for a 0.45 m spot, cabinets 0.82–1.91 m wide for a 0.55 m gap, and narrow cabinets in the wrong colour (style 0.10). All rejected with exact reasons." },
+    { id: "replan", kind: "ai", label: "Gemini 4", name: "Neon again: fix empty items", who: "gemini-4-neon", time: "only when needed",
+      does: "If an item is still empty after the looser search, the planner re-plans only that item, given the rejection reasons, the money left and what is already chosen.",
+      check: "Same plan rules as the first plan. A timeout cancels a hung model call and retries once.",
+      broke: "Not needed in this run. In an earlier test a storage cabinet kept failing on width and was swapped for a narrow nightstand that passed." },
+    { id: "results", kind: "phone", label: "iPhone", name: "Plan, 3D and cart", who: "Results · 3D · Pay cart", time: "—",
+      does: "Products with prices, store links and reasons, a budget meter, AR at real scale, saved scans, and one Shop checkout per store.",
+      check: "Payment always happens on the merchant's own page. RealityCart never places an order.",
+      broke: null },
+  ];
+
+  // cards
+  const cards = document.getElementById("cards");
+  for (const s of STAGES) {
+    const el = document.createElement("article");
+    el.className = "card"; el.id = "card-" + s.id;
+    el.innerHTML = `
+      <div class="top"><span class="kind ${s.kind}">${s.label}</span><span class="time">${s.time}</span></div>
+      <h3>${s.name}</h3>
+      <div class="who">${s.who}</div>
+      <dl>
+        <div><dt>Does</dt><dd>${s.does}</dd></div>
+        <div><dt>${s.kind === "phone" || s.kind === "ext" ? "Notes" : "Checked by"}</dt><dd>${s.check}</dd></div>
+        ${s.broke ? `<div><dt>Broke in testing</dt><dd class="broke"><b>Found:</b> ${s.broke}</dd></div>` : ""}
+      </dl>`;
+    cards.appendChild(el);
+  }
+
+  // faint blueprint grid behind the diagram (room-scan nod)
+  const gl = document.getElementById("gridlines");
+  for (let x = 0; x <= 1200; x += 40) gl.insertAdjacentHTML("beforeend", `<line class="gridline" x1="${x}" y1="0" x2="${x}" y2="470"/>`);
+  for (let y = 0; y <= 470; y += 40) gl.insertAdjacentHTML("beforeend", `<line class="gridline" x1="0" y1="${y}" x2="1200" y2="${y}"/>`);
+
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const nodes = [...document.querySelectorAll(".node")];
+
+  function focusStage(id, scroll) {
+    nodes.forEach(n => n.classList.toggle("active", n.dataset.stage === id));
+    document.querySelectorAll(".card").forEach(c => c.classList.toggle("hl", c.id === "card-" + id));
+    if (scroll) document.getElementById("card-" + id)?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "nearest" });
+  }
+  nodes.forEach(n => {
+    n.addEventListener("click", () => focusStage(n.dataset.stage, true));
+    n.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); focusStage(n.dataset.stage, true); } });
+  });
+  document.querySelectorAll(".guard").forEach(g => g.addEventListener("click", () => focusStage(g.dataset.stage, true)));
+
+  // ---- playback -------------------------------------------------------------
+  const $ = id => document.getElementById(id);
+  const clock = $("clock"), status = $("status"), playBtn = $("play"), playLabel = $("playLabel");
+  const dotsLayer = $("dots");
+  const outcomeIds = ["v0", "v1", "v2", "chip0", "chip1", "rp", "r1", "r2", "r3"];
+  let running = false, runId = 0;
+
+  const setVis = (id, on) => { const el = $(id); if (el) el.style.opacity = on ? 1 : 0; };
+  const say = html => { status.innerHTML = html; };
+  const fmt = s => s.toFixed(1) + " s";
+  let simTime = 0;
+  const wait = ms => new Promise(r => setTimeout(r, reduce ? Math.min(ms, 250) : ms));
+
+  function makeDot() {
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.innerHTML = '<circle class="dot halo" r="11"/><circle class="dot" r="5.5"/>';
+    dotsLayer.appendChild(g); return g;
+  }
+  function travel(dot, pathIds, ms, t0, t1, myRun) {
+    const paths = pathIds.map(id => $(id));
+    const lens = paths.map(p => p.getTotalLength()); const total = lens.reduce((a, b) => a + b, 0);
+    return new Promise(resolve => {
+      if (reduce) { const p = paths.at(-1), pt = p.getPointAtLength(lens.at(-1)); dot.setAttribute("transform", `translate(${pt.x},${pt.y})`); simTime = t1; clock.textContent = fmt(t1); return resolve(); }
+      const start = performance.now();
+      function step(now) {
+        if (myRun !== runId) return resolve();
+        const k = Math.min(1, (now - start) / ms); let d = k * total, i = 0;
+        while (i < lens.length - 1 && d > lens[i]) { d -= lens[i]; i++; }
+        const pt = paths[i].getPointAtLength(Math.min(d, lens[i]));
+        dot.setAttribute("transform", `translate(${pt.x},${pt.y})`);
+        if (t1 !== null) { simTime = t0 + (t1 - t0) * k; clock.textContent = fmt(simTime); }
+        k < 1 ? requestAnimationFrame(step) : resolve();
+      }
+      requestAnimationFrame(step);
+    });
+  }
+  function tick(t0, t1, ms, myRun) {   // advance the clock while a stage "thinks"
+    return new Promise(resolve => {
+      if (reduce) { clock.textContent = fmt(t1); return resolve(); }
+      const start = performance.now();
+      (function step(now) {
+        if (myRun !== runId) return resolve();
+        const k = Math.min(1, (now - start) / ms); clock.textContent = fmt(t0 + (t1 - t0) * k);
+        k < 1 ? requestAnimationFrame(step) : resolve();
+      })(start);
+    });
+  }
+
+  async function play() {
+    const myRun = ++runId; running = true; playBtn.disabled = true; playLabel.textContent = "Playing…";
+    dotsLayer.innerHTML = ""; outcomeIds.forEach(id => setVis(id, false)); clock.textContent = fmt(0);
+    const alive = () => myRun === runId;
+
+    focusStage("capture"); say("<b>iPhone:</b> LiDAR scan + photo + “keep my sofa, add a floor lamp and storage, mostly black”, $600.");
+    const d = makeDot(); await travel(d, ["e1"], 500, 0, 0.1, myRun); if (!alive()) return;
+    focusStage("measure"); say("<b>Code:</b> floor 4.20 × 3.80 m, coffee table top at 0.45 m. No model touches these numbers.");
+    await wait(700); await travel(d, ["e2"], 450, 0.1, 0.2, myRun); if (!alive()) return;
+    focusStage("hydrogen"); say("<b>Hydrogen</b> reads the photo with the scan: a cozy living room, mustard sofa, 3 open spots.");
+    await tick(0.2, 10.1, 1400, myRun); await travel(d, ["e3"], 450, 10.1, 10.3, myRun); if (!alive()) return;
+    focusStage("plan"); say("<b>Neon</b> plans 3 items: floor lamp (≤ $180, 0.45 m wide), storage (≤ $320, 0.55 m), tray (≤ $50). Code checks the budget and sizes.");
+    await tick(10.3, 23.1, 1500, myRun); if (!alive()) return;
+    dotsLayer.innerHTML = "";
+
+    focusStage("shopify"); say("<b>Shopify</b> searches all three items at once. <b>Decisions</b> judges each product from its photo and the room photo.");
+    const lanes = [0, 1, 2].map(() => makeDot());
+    await Promise.all(lanes.map((ld, i) => travel(ld, ["f" + i, "m" + i], 1100, 23.1, i === 0 ? 24.2 : null, myRun))); if (!alive()) return;
+    focusStage("decisions");
+    setVis("chip0", true); setVis("chip1", true); setVis("v2", true);
+    say("Tray: two pass, the better one wins. Lamp and storage fail: arc lamps <b>1.52 m wide vs 0.45 m</b>, cabinets <b>0.82 m vs 0.55 m</b>. Rejected in code, no model call.");
+    await tick(24.2, 25.0, 2200, myRun); if (!alive()) return;
+
+    say("A looser search runs for those two: “black small floor lamp”, “black narrow storage cabinet”. A narrow cabinet in the wrong colour is rejected on style (0.10).");
+    setVis("chip0", false); setVis("chip1", false);
+    await Promise.all([0, 1].map(i => travel(lanes[i], ["b" + i], 450, i === 0 ? 25.0 : null, i === 0 ? 25.6 : null, myRun)));
+    await Promise.all([0, 1].map(i => travel(lanes[i], ["m" + i], 650, i === 0 ? 25.6 : null, i === 0 ? 26.6 : null, myRun))); if (!alive()) return;
+    setVis("v0", true); setVis("v1", true); setVis("rp", true);
+    await wait(900); if (!alive()) return;
+
+    focusStage("results");
+    await Promise.all([travel(lanes[0], ["o0"], 800, 26.6, 26.8, myRun), travel(lanes[1], ["o1"], 800, null, null, myRun), travel(lanes[2], ["o2"], 800, null, null, myRun)]);
+    if (!alive()) return;
+    ["r1", "r2", "r3"].forEach(id => setVis(id, true)); clock.textContent = fmt(26.8);
+    say("Finished: <b>3 of 3 items found, $131.21 of $600</b>, in 26.8 s. Lamp $15.63 · narrow cabinet $71.59 · tray $43.99. No re-plan needed.");
+    setTimeout(() => { if (myRun === runId) dotsLayer.innerHTML = ""; }, 1200);
+    running = false; playBtn.disabled = false; playLabel.textContent = "Play again";
+  }
+  playBtn.addEventListener("click", () => { if (!running) play(); });
+
+  // resting state = the finished run (complete without pressing anything)
+  outcomeIds.forEach(id => setVis(id, true)); setVis("chip0", false); setVis("chip1", false);
+  nodes.forEach(n => n.classList.remove("active"));
+})();
+</script>
+
+</body>
+</html>

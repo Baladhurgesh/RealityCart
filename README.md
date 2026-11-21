@@ -6,6 +6,8 @@
 
 ## Architecture
 
+**Interactive diagram:** [docs/architecture/index.html](docs/architecture/index.html) replays one real run (26.8 s, 3 of 3 items, $131.21 of $600) and shows the code check behind each AI step. Open it in a browser, or via GitHub Pages once enabled (`/docs` on `main`).
+
 | Layer | Stack |
 | --- | --- |
 | iOS client | SwiftUI + RoomPlan LiDAR + RealityKit / SceneKit + Speech |
