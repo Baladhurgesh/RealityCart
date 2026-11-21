@@ -121,8 +121,9 @@ async def run_redesign(
                 failures.append(f"{slot.id}: catalog error {exc}")
                 continue
 
+            candidates = [c for c in candidates if c.available is not False]
             if not candidates:
-                failures.append(f"{slot.id}: no catalog results for '{query}'")
+                failures.append(f"{slot.id}: no in-stock catalog results for '{query}'")
                 continue
 
             rejected = []

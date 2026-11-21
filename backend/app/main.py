@@ -6,13 +6,20 @@ import json
 import logging
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.pipeline import run_redesign
-from app.schemas import HealthResponse, RedesignResponse, RoomPlanPayload, SurfaceCalibration
-from app.shopify_mcp import search_catalog
+from app.schemas import (
+    CatalogPage,
+    HealthResponse,
+    ProductOffer,
+    RedesignResponse,
+    RoomPlanPayload,
+    SurfaceCalibration,
+)
+from app.shopify_mcp import get_product, search_catalog_page
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,6 +51,7 @@ async def health() -> HealthResponse:
         status="ok",
         gemini_configured=bool(settings.gemini_api_key),
         shopify_profile=settings.shopify_agent_profile,
+        shopify_transport=settings.shopify_transport,
         models={
             "scene": settings.scene_model,
             "plan": settings.plan_model,
@@ -52,18 +60,45 @@ async def health() -> HealthResponse:
     )
 
 
-@app.get("/v1/shopify/search")
+@app.get("/v1/shopify/search", response_model=CatalogPage)
 async def shopify_search(
     q: str,
     max_price: float | None = None,
-    limit: int = 5,
-):
-    """Smoke-test endpoint for Catalog MCP."""
+    limit: Annotated[int, Query(ge=1, le=50)] = 5,
+    cursor: str | None = None,
+    country: str | None = None,
+    currency: str | None = None,
+    transport: Annotated[str | None, Query(pattern="^(shop|catalog|auto)$")] = None,
+) -> CatalogPage:
+    """Paginated catalog search (Shop MCP / Catalog MCP). Pass `cursor` for the next page."""
     try:
-        products = await search_catalog(q, max_price_usd=max_price, limit=limit)
+        return await search_catalog_page(
+            q,
+            max_price_usd=max_price,
+            limit=limit,
+            cursor=cursor,
+            country=country,
+            currency=currency,
+            transport=transport,
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"query": q, "count": len(products), "products": products}
+
+
+@app.get("/v1/shopify/products/{product_id:path}", response_model=ProductOffer)
+async def shopify_product(
+    product_id: str,
+    country: str | None = None,
+    currency: str | None = None,
+    transport: Annotated[str | None, Query(pattern="^(shop|catalog|auto)$")] = None,
+) -> ProductOffer:
+    """Full product detail (all variants / images) via get_product."""
+    try:
+        return await get_product(
+            product_id, country=country, currency=currency, transport=transport
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/v1/redesign", response_model=RedesignResponse)

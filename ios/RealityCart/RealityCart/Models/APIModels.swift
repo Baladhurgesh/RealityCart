@@ -94,6 +94,14 @@ struct ProductOfferDTO: Codable, Identifiable {
     let product_url: String?
     let vendor: String?
     let has_3d: Bool?
+    // Added with the Shop MCP integration (all optional → backward compatible).
+    let price_max_usd: Double?
+    let image_urls: [String]?
+    let seller_domain: String?
+    let rating: Double?
+    let review_count: Int?
+    let available: Bool?
+    let dimensions_hint: String?
 }
 
 struct DecisionResultDTO: Codable {

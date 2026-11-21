@@ -101,18 +101,46 @@ class DesignPlan(BaseModel):
     model: str = "gemini-4-carbon"
 
 
+class ProductVariant(BaseModel):
+    id: str
+    title: str = "Default"
+    price_usd: float | None = None
+    available: bool | None = None
+    url: str | None = None
+
+
 class ProductOffer(BaseModel):
     id: str
     title: str
     description: str | None = None
-    price_usd: float | None = None
+    price_usd: float | None = None  # lowest price (price_range.min)
+    price_max_usd: float | None = None
     currency: str = "USD"
     image_url: str | None = None
+    image_urls: list[str] = Field(default_factory=list)
     product_url: str | None = None
-    vendor: str | None = None
+    vendor: str | None = None  # seller name
+    seller_domain: str | None = None
+    rating: float | None = None
+    review_count: int | None = None
+    available: bool | None = None
     has_3d: bool = False
     dimensions_hint: str | None = None
-    raw: dict[str, Any] | None = None
+    variants: list[ProductVariant] = Field(default_factory=list)
+    # Full UCP product for debugging; never sent to clients.
+    raw: dict[str, Any] | None = Field(default=None, exclude=True)
+
+
+class CatalogPage(BaseModel):
+    """One page of search_catalog results (mirrors ShopMCPDemo pagination)."""
+
+    query: str
+    count: int
+    total_count: int | None = None
+    has_next_page: bool = False
+    cursor: str | None = None
+    source: str  # "shop" | "catalog" — which MCP transport answered
+    products: list[ProductOffer] = Field(default_factory=list)
 
 
 class DecisionResult(BaseModel):
@@ -161,4 +189,5 @@ class HealthResponse(BaseModel):
     status: str
     gemini_configured: bool
     shopify_profile: str
+    shopify_transport: str = "auto"
     models: dict[str, str]

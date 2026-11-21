@@ -18,6 +18,13 @@ class Settings(BaseSettings):
         "valid-with-capabilities.json"
     )
     shopify_mcp_url: str = "https://catalog.shopify.com/api/ucp/mcp"
+    # Shop MCP (from ShopMCPDemo): stateless, keyless JSON-RPC.
+    shop_mcp_url: str = "https://mcp.shop.com/"
+    shop_mcp_protocol_version: str = "2026-07-28"
+    # shop | catalog | auto (shop first, catalog fallback)
+    shopify_transport: str = "auto"
+    shopify_country: str = "US"
+    shopify_currency: str = "USD"
     cors_origins: str = "*"
     host: str = "0.0.0.0"
     port: int = 8000

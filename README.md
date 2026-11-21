@@ -13,7 +13,7 @@
 | Scene parse | `gemini-4-hydrogen` |
 | Design plan | `gemini-4-carbon` |
 | Gates | `gemini-decision-1` (Decisions API) |
-| Commerce | Shopify Catalog MCP (`search_catalog`, `get_product`) |
+| Commerce | Shop MCP (`mcp.shop.com`) with Shopify Catalog MCP fallback (`search_catalog`, `get_product`) |
 
 ```
 iOS capture (photo / RoomPlan)
@@ -56,7 +56,8 @@ python -m app
 API: `http://127.0.0.1:8000`  
 Docs: `http://127.0.0.1:8000/docs`  
 Health: `GET /health`  
-Shopify smoke: `python scripts/smoke_shopify.py "black desk lamp"`
+Shopify smoke: `python scripts/smoke_shopify.py "black desk lamp" --transport auto`  
+Catalog explorer (ShopMCPDemo UI on top of this API): `pip install -r requirements-dev.txt && streamlit run tools/catalog_explorer.py`
 
 ### 2. iOS app
 
@@ -86,7 +87,22 @@ open RealityCart.xcodeproj
 - `room_plan_json` — optional CapturedRoom-derived JSON
 - `calibration_json` — optional `{ "width_m": 1.2, "depth_m": 0.6, "height_m": 0.74 }`
 
-`GET /v1/shopify/search?q=desk+lamp&max_price=80`
+`GET /v1/shopify/search?q=desk+lamp&max_price=80&limit=20[&cursor=…&transport=shop|catalog|auto]`
+→ `CatalogPage { query, count, total_count, has_next_page, cursor, source, products[] }`
+
+`GET /v1/shopify/products/{id}` → full `ProductOffer` (all variants + images) via `get_product`
+
+### Commerce MCP transports
+
+The client in `backend/app/shopify_mcp.py` merges the **ShopMCPDemo** client with the Catalog MCP client:
+
+| Transport | Endpoint | Auth | Notes |
+| --- | --- | --- | --- |
+| `shop` | `https://mcp.shop.com/` | none | Stateless JSON-RPC `tools/call` + `_meta` / `Mcp-*` headers (from ShopMCPDemo) |
+| `catalog` | `https://catalog.shopify.com/api/ucp/mcp` | UCP agent profile (+ optional client creds) | Global Catalog bonus-track endpoint |
+| `auto` (default) | shop → catalog | — | Falls back if one endpoint errors; `source` in the response says which answered |
+
+Both return the same UCP product shape; prices are integer minor units and are normalized to `price_usd` / `price_max_usd`.
 
 ## Element 119 stress
 

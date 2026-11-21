@@ -19,3 +19,6 @@ ios/**/DerivedData/
 # Captures may contain personal photos — keep folder, ignore contents
 eval/captures/*
 !eval/captures/.gitkeep
+
+backend/tools
+requirements-dev.txt
